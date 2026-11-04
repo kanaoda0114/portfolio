@@ -17,3 +17,6 @@ desktop.ini
 .DS_Store
 .vscode/
 .idea/
+
+# 応募用の個人メモ（GitHubに上げない）
+応募メモ/
