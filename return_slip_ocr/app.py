@@ -5,17 +5,20 @@
 起動: .venv\\Scripts\\python.exe app.py  →  http://127.0.0.1:5000
 """
 import base64
+import io
 import json
 import logging
 import os
 import time
 import traceback
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
 import config
+from services import db as dbm
 from services import excel_export as xl
+from services import master_import as mi
 from services import review as rv
 from services import slip_check as sc
 from services.doc_store import STATE_CONFIRMED, STATE_EXPORTED, STATE_REVIEWING, DocStore, now_str
@@ -674,6 +677,75 @@ def api_export():
             "notice": notice,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# マスタ・売上データの取り込み（docs/要件定義書.md F8、docs/データ設計書.md 4章）
+# ---------------------------------------------------------------------------
+
+
+def _db():
+    return dbm.connect(config.DB_PATH)
+
+
+@app.get("/api/import/kinds")
+def api_import_kinds():
+    """取り込めるデータの種類と、今の件数。"""
+    con = _db()
+    try:
+        counts = dbm.counts(con)
+    finally:
+        con.close()
+    return jsonify(
+        {
+            "ok": True,
+            "kinds": [{"kind": k, "label": d.label, "columns": [c.name for c in d.cols]} for k, d in mi.DATASETS.items()],
+            "counts": counts,
+        }
+    )
+
+
+@app.get("/api/import/<kind>/template")
+def api_import_template(kind):
+    """取り込み用の見本Excel（列名と説明だけ）をダウンロードする。"""
+    if kind not in mi.DATASETS:
+        raise AppError(f"取り込みの種類が正しくありません: {kind}", status=404, code="bad_kind")
+    return send_file(
+        io.BytesIO(mi.template_xlsx(kind)),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"{mi.DATASETS[kind].label}_見本.xlsx",
+    )
+
+
+@app.post("/api/import/<kind>")
+def api_import(kind):
+    """Excel / CSV を取り込む。1行でもエラーがあれば何も入れず、エラーの一覧を返す。"""
+    file = request.files.get("file")
+    if file is None or file.filename == "":
+        raise AppError("ファイルが選択されていません。", "取り込むExcelまたはCSVを選んでください。", code="no_file")
+    data = file.read()
+    if len(data) > config.MAX_IMPORT_MB * 1024 * 1024:
+        raise AppError(f"ファイルが大きすぎます（上限 {config.MAX_IMPORT_MB}MB）。", code="too_large")
+    con = _db()
+    try:
+        result = mi.import_file(con, kind, file.filename, data, now_str())
+        result["counts"] = dbm.counts(con)
+    finally:
+        con.close()
+    status = 200 if result["imported"] else 400
+    if not result["imported"]:
+        result.update(
+            {
+                "ok": False,
+                "code": "import_rejected",
+                "error": f"{result['label']}にエラーが {result['error_count']} 件あるため、何も取り込んでいません。",
+                "hint": "エラーの行を直してから、もう一度取り込んでください。",
+            }
+        )
+    else:
+        result["ok"] = True
+    return jsonify(result), status
 
 
 @app.errorhandler(AppError)

@@ -20,3 +20,6 @@ desktop.ini
 
 # 応募用の個人メモ（GitHubに上げない）
 応募メモ/
+
+# 試験用の架空サンプル（公開してよいもの）
+!return_slip_ocr/samples/*.pdf

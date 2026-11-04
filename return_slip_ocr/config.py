@@ -71,3 +71,9 @@ PARTNER_MASTER_PATH = os.path.join(_HERE, "masters", "取引先マスタ.csv")
 
 # 数量×単価 と 金額 のずれを許す幅（円）。これを超えると警告（C3）
 AMOUNT_TOLERANCE = 1
+
+# マスタ・売上データ・返品記録のデータベース（docs/データ設計書.md）
+DB_PATH = os.path.join(RECORDS_DIR, "returns.db")
+
+# マスタ・売上データの取り込みファイルの上限（MB）
+MAX_IMPORT_MB = 20

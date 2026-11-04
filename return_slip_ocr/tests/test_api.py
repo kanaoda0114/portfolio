@@ -34,6 +34,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DEFAULT_EXPORT_DIR", str(records / "exports"))
     monkeypatch.setattr(config, "SETTINGS_PATH", str(records / "settings.json"))
     monkeypatch.setattr(config, "HISTORY_PATH", str(records / "export_history.csv"))
+    monkeypatch.setattr(config, "DB_PATH", str(records / "returns.db"))
     monkeypatch.setattr(app_module.app, "test_client_class", LocalClient)
     return app_module.app.test_client()
 
@@ -263,3 +264,32 @@ def test_127001以外のアドレスで来たリクエストは断る(client):
     res = client.get("/api/settings", base_url="http://evil.example.com")
     assert res.status_code == 403
     assert res.get_json()["code"] == "bad_host"
+
+
+# ---- マスタ・売上データの取り込み（要件定義書 F8） ----
+
+
+def test_見本Excelをダウンロードできる(client):
+    res = client.get("/api/import/item/template")
+    assert res.status_code == 200
+    assert "attachment" in res.headers["Content-Disposition"]
+    assert res.data[:2] == b"PK"  # xlsx（zip）の先頭
+
+
+def test_画面からマスタを取り込めて件数が返る(client):
+    data = "品番,枝番,商品名,単位,税率,有効\r\nNOTE-104,01,A5ノート,冊,10,\r\n".encode("utf-8")
+    res = client.post("/api/import/item", data={"file": (io.BytesIO(data), "商品.csv")}, content_type="multipart/form-data")
+    body = res.get_json()
+    assert res.status_code == 200, body
+    assert body["imported"] is True
+    assert body["counts"]["m_item"] == 1
+
+
+def test_エラーがあると400で理由の一覧を返す(client):
+    data = "品番,枝番,商品名,単位,税率,有効\r\nNOTE-104,01,A5ノート,冊,5,\r\n".encode("utf-8")
+    res = client.post("/api/import/item", data={"file": (io.BytesIO(data), "商品.csv")}, content_type="multipart/form-data")
+    body = res.get_json()
+    assert res.status_code == 400
+    assert body["code"] == "import_rejected"
+    assert body["errors"][0] == {"row": 2, "column": "税率", "message": "10 または 8 にしてください"}
+    assert client.get("/api/import/kinds").get_json()["counts"]["m_item"] == 0
