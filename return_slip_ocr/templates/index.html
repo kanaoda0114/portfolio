@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>返品伝票OCR（精度記録）</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body data-max-mb="{{ max_mb }}" data-low-conf="{{ low_conf }}" data-fields='{{ fields | tojson }}'>
+  <header>
+    <h1>返品伝票OCR <small>読み取り精度の記録</small></h1>
+    <p class="note">PDFの各ページを、このPC内のEasyOCR（日本語・英数字）で読み取ります。外部には送信しません。</p>
+  </header>
+
+  <main>
+    <form id="upload-form" class="panel">
+      <label class="file">
+        <input type="file" id="pdf" name="pdf" accept="application/pdf,.pdf">
+      </label>
+      <button type="submit" id="upload-btn">アップロード</button>
+      <span id="status" class="status" role="status"></span>
+    </form>
+
+    <div id="error" class="error" hidden>
+      <strong>エラー:</strong> <span id="error-msg"></span>
+      <div id="error-hint" class="hint"></div>
+    </div>
+
+    <section id="doc" hidden>
+      <div class="panel pagebar">
+        <div class="docinfo">
+          ファイル: <b id="doc-name"></b>
+          <span class="muted">記録フォルダ: <code id="records-folder"></code></span>
+        </div>
+        <div id="page-tabs" class="page-tabs"></div>
+        <div class="actions">
+          <button type="button" id="ocr-page">このページをOCR</button>
+          <button type="button" id="ocr-all" class="secondary">未OCRのページをすべてOCR</button>
+          <button type="button" id="ocr-cancel" class="danger" hidden>中止</button>
+          <span id="ocr-progress" class="status"></span>
+        </div>
+      </div>
+
+      <div id="page-summary" class="panel summary"></div>
+
+      <div class="layout">
+        <div class="viewer panel">
+          <div class="viewer-head">
+            <span id="viewer-title"></span>
+            <span>
+              <label><input type="checkbox" id="show-boxes" checked> 枠を表示</label>
+              <label><input type="checkbox" id="actual-size"> 等倍で表示</label>
+            </span>
+          </div>
+          <div id="canvas-wrap" class="canvas-wrap"><canvas id="canvas"></canvas></div>
+        </div>
+
+        <div class="table-wrap panel">
+          <div class="filters">
+            <input type="search" id="filter-text" placeholder="文字で絞り込み">
+            <label><input type="checkbox" id="filter-low"> 低信頼度のみ</label>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>No</th><th class="text">読み取った文字</th><th>信頼度</th>
+                <th>x</th><th>y</th><th>幅</th><th>高さ</th><th class="text">割り当て先</th>
+              </tr>
+            </thead>
+            <tbody id="rows"></tbody>
+          </table>
+          <div class="export">
+            <span>このページのOCR文字一覧:</span>
+            <button type="button" id="export-csv">CSV</button>
+            <button type="button" id="export-json">JSON</button>
+            <label><input type="checkbox" id="export-filtered"> 絞り込み中の行だけ</label>
+          </div>
+        </div>
+      </div>
+
+      <section id="review" class="panel review">
+        <h2>明細の確認 <span id="review-page" class="muted"></span></h2>
+        <p id="review-note" class="note"></p>
+        <div id="assign-banner" class="assign-banner" hidden>
+          <b id="assign-target"></b> の枠を選択中です。画像の枠、またはOCR一覧の行をクリックすると追加／解除します。
+          <button type="button" id="assign-done">選択を終わる</button>
+        </div>
+        <div id="unassigned" class="unassigned"></div>
+        <div class="review-scroll">
+          <table class="review-table">
+            <thead><tr id="review-head"></tr></thead>
+            <tbody id="review-rows"></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button type="button" id="add-row" class="secondary">行を追加</button>
+          <button type="button" id="save-review">保存して判定</button>
+          <span id="save-status" class="status"></span>
+        </div>
+        <details class="rules">
+          <summary>判定のルール（表記差の扱い）</summary>
+          <ul>
+            <li><b>正解</b>は、原本を見てあなたが入力した値だけです。OCR結果や計算から自動で正解を作ることはしません。正解が空の欄は「未入力」として集計に含めません。</li>
+            <li><b>一致</b>: OCR結果と正解が文字どおり同じ。</li>
+            <li><b>一致（表記差）</b>: 次の表記だけをそろえると同じ。どれを使ったかを判定欄とCSVに記録します。
+              <ul>
+                <li>全角→半角（ＰＮ→PN、１２→12 など）</li>
+                <li>前後の空白・途中の空白を除く</li>
+                <li>ハイフンの種類（‐ – — − － → -）。長音「ー」や漢数字「一」は別の文字として扱います</li>
+                <li>数量・単価・金額のみ: 桁区切りカンマと通貨記号（¥, 円）を除く</li>
+              </ul>
+            </li>
+            <li><b>不一致</b>: そろえても違う（O と 0、I と 1 などの取り違えも不一致）。</li>
+            <li><b>不一致（読めず）</b>: 欄に枠が1つも割り当てられていない／文字が空。対象件数に含めます。</li>
+            <li>「原本も空欄」にチェックした欄は、OCRが何も読まなければ一致です。</li>
+            <li>正解率 = （一致 ＋ 一致（表記差））÷ 対象件数。完全一致率 = 一致 ÷ 対象件数。</li>
+          </ul>
+        </details>
+      </section>
+
+      <section id="totals" class="panel">
+        <h2>集計 <span class="muted">（保存済みのページのみ）</span></h2>
+        <div class="totals-grid">
+          <div>
+            <h3>項目別</h3>
+            <table class="stat-table" id="by-field"></table>
+          </div>
+          <div>
+            <h3>ページ別（正しく読めた件数 / 対象件数）</h3>
+            <div class="review-scroll"><table class="stat-table" id="by-page"></table></div>
+          </div>
+        </div>
+        <p class="note">記録ファイル（保存するたびに更新）: 記録フォルダ内の <code>review_cells.csv</code>（全欄のOCR結果・正解・判定）と <code>summary.csv</code>（項目別・ページ別の集計）</p>
+      </section>
+    </section>
+  </main>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

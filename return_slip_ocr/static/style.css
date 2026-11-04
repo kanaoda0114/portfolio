@@ -1,0 +1,154 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "Yu Gothic UI", "Meiryo", sans-serif;
+  background: #f4f5f7;
+  color: #222;
+}
+header { padding: 16px 24px 4px; }
+h1 { margin: 0; font-size: 22px; }
+h1 small { font-size: 13px; color: #666; font-weight: normal; }
+h2 { margin: 0 0 8px; font-size: 17px; }
+h3 { margin: 4px 0 6px; font-size: 14px; }
+.note { margin: 6px 0; font-size: 13px; color: #555; }
+.muted { color: #888; font-weight: normal; }
+code { font-size: 12px; background: #f0f2f5; padding: 1px 4px; border-radius: 3px; word-break: break-all; }
+main { padding: 12px 24px 32px; }
+
+.panel {
+  background: #fff;
+  border: 1px solid #dde0e5;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+#upload-form, .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.actions { margin-top: 8px; }
+button {
+  padding: 8px 18px;
+  font-size: 14px;
+  border: 0;
+  border-radius: 4px;
+  background: #1f6feb;
+  color: #fff;
+  cursor: pointer;
+}
+button.secondary { background: #5a6b7d; }
+button.danger { background: #c0392b; }
+button:disabled { background: #9ab; cursor: not-allowed; }
+button.small {
+  padding: 2px 8px;
+  font-size: 12px;
+  background: #eef1f5;
+  color: #234;
+  border: 1px solid #c9d0d8;
+}
+button.small.on { background: #8a2be2; color: #fff; border-color: #8a2be2; }
+button.small.danger { background: #fff; color: #c0392b; border-color: #e3b3ad; }
+button.small:disabled { color: #aaa; background: #f5f5f5; }
+.status { font-size: 14px; color: #555; }
+.status.warn { color: #b35c00; font-weight: bold; }
+
+.error {
+  background: #fdecec;
+  border: 1px solid #e5a1a1;
+  color: #8a1c1c;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+.error .hint { margin-top: 4px; font-size: 13px; color: #6b2a2a; }
+
+/* ページ切り替え */
+.docinfo { display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline; font-size: 14px; }
+.page-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.tab {
+  display: flex; flex-direction: column; align-items: center;
+  min-width: 72px; padding: 4px 8px;
+  background: #fff; color: #333; border: 2px solid #ccd3db;
+}
+.tab small { font-size: 11px; }
+.tab.todo { color: #888; }
+.tab.ocr-done { border-color: #7aa7e8; }
+.tab.saved { border-color: #2d8a4e; background: #eaf7ee; }
+.tab.current { outline: 3px solid #1f6feb; outline-offset: 1px; }
+
+.summary { display: flex; gap: 20px; flex-wrap: wrap; font-size: 14px; }
+.summary b { font-size: 15px; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+@media (max-width: 1000px) { .layout { grid-template-columns: 1fr; } }
+
+.viewer-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 13px; margin-bottom: 6px; }
+.canvas-wrap { max-height: 85vh; overflow: auto; }
+canvas { width: 100%; height: auto; border: 1px solid #ccc; display: block; }
+.canvas-wrap.actual canvas { width: auto; max-width: none; }
+
+.table-wrap { max-height: 85vh; overflow: auto; padding: 0; display: flex; flex-direction: column; }
+.table-wrap table { flex: 1; }
+.filters {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; gap: 12px; align-items: center;
+  padding: 8px 12px; background: #fff; border-bottom: 1px solid #dde0e5;
+}
+.filters input[type=search] { flex: 1; padding: 4px 8px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 4px 8px; border-bottom: 1px solid #eee; text-align: right; white-space: nowrap; }
+th { background: #f0f2f5; }
+.table-wrap th { position: sticky; top: 41px; z-index: 1; }
+td.text, th.text { text-align: left; white-space: normal; }
+td.center { text-align: center; }
+.table-wrap td.text { font-size: 14px; }
+#rows tr.low td { background: #fff4e0; }
+#rows tr.low td.conf { color: #b35c00; font-weight: bold; }
+#rows tr.assigned td:last-child { color: #8a2be2; }
+#rows tr.active td { background: #dbe9ff; }
+#rows tr { cursor: pointer; }
+
+.export {
+  position: sticky; bottom: 0;
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  padding: 8px 12px; background: #fff; border-top: 1px solid #dde0e5; font-size: 13px;
+}
+.export button { padding: 4px 12px; font-size: 13px; background: #2d8a4e; }
+
+/* 明細の確認 */
+.assign-banner {
+  background: #f3e8fd; border: 1px solid #c9a3ef; color: #4b1780;
+  padding: 8px 12px; border-radius: 4px; margin: 8px 0; font-size: 14px;
+}
+.assign-banner button { margin-left: 8px; padding: 4px 12px; background: #8a2be2; }
+.unassigned { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; margin: 6px 0; }
+.chip { padding: 2px 8px; font-size: 12px; background: #fff4e0; color: #663c00; border: 1px solid #e0b36a; border-radius: 12px; }
+.review-scroll { overflow-x: auto; }
+.review-table th { text-align: center; }
+.review-table td { vertical-align: top; }
+td.rc { text-align: left; min-width: 180px; border-left: 1px solid #eee; font-size: 13px; }
+td.rc > div { margin: 2px 0; }
+.rc .ocr-line { display: flex; gap: 6px; align-items: baseline; }
+.rc .ocr-text { font-family: Consolas, "MS Gothic", monospace; font-size: 15px; font-weight: bold; }
+.rc .nos { display: flex; gap: 4px; align-items: center; }
+.rc .truth-line { display: flex; gap: 4px; }
+.rc input.truth { width: 120px; padding: 3px 6px; font-size: 14px; font-family: Consolas, "MS Gothic", monospace; }
+.small-label { font-size: 12px; color: #555; }
+.rules-text { font-size: 11px; color: #555; white-space: normal; }
+.tag { font-size: 11px; padding: 0 5px; border-radius: 3px; }
+.tag.auto { background: #e3eefc; color: #1b4f9c; }
+.tag.manual { background: #eee; color: #555; }
+td.rc.ok { background: #eaf7ee; }
+td.rc.ok-notation { background: #f2f9e6; }
+td.rc.ng { background: #fdecec; }
+td.rc.ng-unread { background: #fbe3d9; }
+td.rc.stale { background: #fffbe6; }
+td.rc.target { outline: 3px solid #8a2be2; outline-offset: -3px; }
+.rules { margin-top: 10px; font-size: 13px; }
+.rules li { margin: 2px 0; }
+
+/* 集計 */
+.totals-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); gap: 16px; }
+@media (max-width: 1100px) { .totals-grid { grid-template-columns: 1fr; } }
+.stat-table tr.total td { font-weight: bold; border-top: 2px solid #ccd3db; }
+.stat-table tr.clickable { cursor: pointer; }
+.stat-table tr.clickable:hover td { background: #f3f7ff; }
+.stat-table tr.current td { background: #dbe9ff; }
+.stat-table td.has-ng { color: #c0392b; font-weight: bold; }

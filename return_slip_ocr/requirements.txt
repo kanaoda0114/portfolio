@@ -1,0 +1,5 @@
+flask>=3.0
+pymupdf>=1.24
+numpy
+# easyocr はインストール済みの前提（torch も一緒に入っています）
+easyocr
