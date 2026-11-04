@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# OCRの記録（伝票の読み取り結果・CSVなど）
+records/
+
+# アップロードした伝票などのサンプル
+*.pdf
+
+# OS / エディタ
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
