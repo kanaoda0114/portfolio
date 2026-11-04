@@ -7,6 +7,8 @@
 records/<PDF名>_<ハッシュ先頭8桁>/
     ocr/page_01.json …  ページごとのOCR結果（文字・位置・信頼度）
     review.json      …  明細の割り当てと、人が確認した正解（アプリが読み込む元データ）
+    header.json      …  伝票番号・返品日・取引先名（人が入力）
+    status.json      …  伝票の状態（確認中／確定済み／出力済み）と日時
     review_cells.csv …  全欄の OCR結果／正解／判定（見直し用）
     summary.csv      …  項目別・ページ別の集計
 """
@@ -18,6 +20,11 @@ import threading
 from datetime import datetime
 
 from .errors import AppError
+
+
+STATE_REVIEWING = "確認中"
+STATE_CONFIRMED = "確定済み"
+STATE_EXPORTED = "出力済み"
 
 
 def now_str():
@@ -134,6 +141,50 @@ class DocStore:
             _write_atomic(self._review_path(doc), json.dumps(review, ensure_ascii=False, indent=1))
             write_csvs(doc, review)
             return review
+
+    # ---- 伝票ヘッダ（伝票番号・返品日・取引先名） ----
+
+    def _json_path(self, doc, name):
+        return os.path.join(doc["folder"], name)
+
+    def _load_json(self, doc, name, default):
+        path = self._json_path(doc, name)
+        if not os.path.exists(path):
+            return default
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError) as e:
+            raise AppError(f"{name} を読めません（{e}）", f"{path} が壊れている可能性があります。", status=500, code="json_broken")
+
+    def load_header(self, doc):
+        return self._load_json(doc, "header.json", {"伝票番号": "", "返品日": "", "取引先名": ""})
+
+    def save_header(self, doc, header):
+        _write_atomic(self._json_path(doc, "header.json"), json.dumps(header, ensure_ascii=False, indent=1))
+
+    # ---- 伝票の状態（確認中 → 確定済み → 出力済み） ----
+
+    def load_status(self, doc):
+        return self._load_json(doc, "status.json", {"state": STATE_REVIEWING})
+
+    def save_status(self, doc, status):
+        _write_atomic(self._json_path(doc, "status.json"), json.dumps(status, ensure_ascii=False, indent=1))
+
+    def ensure_editable(self, doc):
+        """確定済み・出力済みの伝票は編集させない（要件定義書 F7）。"""
+        state = self.load_status(doc)["state"]
+        if state != STATE_REVIEWING:
+            raise AppError(
+                f"この伝票は「{state}」のため編集できません。",
+                "直すときは「確定を取り消す」を押してください（出力済みの伝票は取り消せません）。",
+                status=409,
+                code="locked",
+            )
+
+    def all_docs(self):
+        with self._lock:
+            return list(self._docs.values())
 
     def write_csv(self, doc, name, text):
         # BOM付きUTF-8: Excelでダブルクリックしても文字化けしない

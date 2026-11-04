@@ -48,3 +48,26 @@ TABLE_END_LABELS = ["小計"]
 
 # 文字枠の幅のうち、この割合以上が1つの列に入っているときだけ自動で割り当てる
 AUTO_ASSIGN_MIN_OVERLAP = 0.8
+
+# ---- 確定と取込用Excelの出力（docs/要件定義書.md F4〜F7） ----
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+# 取込用Excelの出力先。利用者が画面で設定した値（SETTINGS_PATH に保存）が優先され、
+# 未設定のときはこのフォルダを使う
+DEFAULT_EXPORT_DIR = os.path.join(RECORDS_DIR, "exports")
+
+# 画面で変えた設定（出力先など）の保存先
+SETTINGS_PATH = os.path.join(RECORDS_DIR, "settings.json")
+
+# 出力履歴（重複チェック C6 に使う）。出力先を変えても1か所にまとめる
+HISTORY_PATH = os.path.join(RECORDS_DIR, "export_history.csv")
+
+# Excelの列の並び・列名・コード値
+IMPORT_FORMAT_PATH = os.path.join(_HERE, "import_format.json")
+
+# 取引先名 → 取引先コード の対応表
+PARTNER_MASTER_PATH = os.path.join(_HERE, "masters", "取引先マスタ.csv")
+
+# 数量×単価 と 金額 のずれを許す幅（円）。これを超えると警告（C3）
+AMOUNT_TOLERANCE = 1
