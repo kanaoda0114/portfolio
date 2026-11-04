@@ -1,5 +1,8 @@
 flask>=3.0
 pymupdf>=1.24
 numpy
+openpyxl>=3.1
+# テスト用（.venv\Scripts\python -m pytest）
+pytest>=8
 # easyocr はインストール済みの前提（torch も一緒に入っています）
 easyocr

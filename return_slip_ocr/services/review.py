@@ -105,12 +105,28 @@ def judge_rows(rows, items, fields, numeric_fields):
                 "assign": c.get("assign", "manual"),
                 "truth": c.get("truth", ""),
                 "truth_blank": bool(c.get("truth_blank", False)),
+                "adopt_ocr": bool(c.get("adopt_ocr", False)),
                 "ocr_text": ocr["text"],
                 "ocr_min_conf": ocr["min_conf"],
                 **j,
             }
-        out.append({"row": i, "no_text": row.get("no_text", ""), "cells": cells})
+        out.append({"row": i, "no_text": row.get("no_text", ""), "cells": cells, "extra": empty_extra(row.get("extra"))})
     return out
+
+
+# 明細ごとに人が入力・選択する項目（OCRの精度集計には含めない）
+LINE_KINDS = ("通常", "値引")
+CONDITIONS = ("", "良品", "不良")
+
+
+def empty_extra(extra=None):
+    """明細の追加項目。保存されていない項目は初期値で補う。"""
+    extra = extra or {}
+    return {
+        "明細区分": extra.get("明細区分") if extra.get("明細区分") in LINE_KINDS else "通常",
+        "返品理由": extra.get("返品理由") or "",
+        "良品不良": extra.get("良品不良") if extra.get("良品不良") in CONDITIONS else "",
+    }
 
 
 def _new_counter():
