@@ -904,3 +904,50 @@ td.need { background: #fffaf0; }
 
 .work-table td:nth-child(2) .cell-input { min-width: 84px; }
 .work-table th.row-no { min-width: 112px; }
+
+/* 行番号と区分のあいだをあける */
+.row-num { margin-right: 6px; }
+.work-table th.row-no .row-state { margin-right: 12px; }
+.work-table th.row-no { min-width: 124px; }
+.work-table td:nth-child(2) .cell-input { min-width: 78px; }
+.work-table td:nth-child(6) select { max-width: 68px; }
+
+/* ================================================================ 明細をExcelのセルのような見た目にする */
+.table-scroll { border: 1px solid #b9c0cf; border-radius: 4px; background: #fff; }
+.work-table { border-collapse: collapse; font-size: 13px; }
+.work-table th, .work-table td { border: 1px solid #d6dbe6; padding: 0; height: 34px; }
+.work-table thead th {
+  padding: 0 6px; height: 28px;
+  background: #eef1f6; color: var(--ink-2);
+  font-size: 11px; font-weight: 700; letter-spacing: 0; text-align: center;
+  border-bottom: 2px solid #b9c0cf;
+}
+.work-table th.row-no { padding: 0 6px; background: #f4f6fa; min-width: 124px; }
+.work-table tbody tr:hover td, .work-table tbody tr:hover th { background: inherit; }
+.work-table tbody tr:hover td { background: #fbfcff; }
+/* 入力欄はセルいっぱいに広げ、枠線は消す（セルそのものが枠） */
+.work-table .cell-input, .work-table td > select, .work-table .inp-wrap select {
+  width: 100%; min-width: 0; max-width: none; height: 100%; min-height: 32px;
+  padding: 0 6px; border: 0; border-radius: 0; background: transparent; box-shadow: none;
+}
+.work-table td:nth-child(2) .cell-input { min-width: 84px; }
+.work-table td:nth-child(3) .cell-input { width: 100%; }
+.work-table td:nth-child(4) .cell-input, .work-table td:nth-child(5) .cell-input { width: 100%; text-align: right; }
+.work-table td:nth-child(5) select, .work-table td:nth-child(6) select { max-width: none; }
+.work-table .inp-wrap { height: 100%; gap: 0; }
+.work-table .inp-wrap .ok-btn { height: 100%; width: 26px; border-radius: 0; }
+.work-table .cell-input:focus, .work-table select:focus { outline: 2px solid var(--accent); outline-offset: -2px; box-shadow: none; }
+.work-table td.need { background: #fff6dd; }
+.work-table td.need .cell-input, .work-table td.need select { background: transparent; }
+.work-table .hint { position: absolute; display: none; }
+.work-table td:nth-child(2) .cell-input { font-family: var(--mono); }
+.work-table td.na { color: #c3cad6; }
+.work-table td.cand-one, .work-table td.cand-none { padding: 0 6px; }
+.work-table td.row-ops { text-align: center; }
+.work-table .icon-btn { border: 0; background: transparent; }
+.work-table th.row-no select { border: 1px solid #d6dbe6; border-radius: 4px; height: 24px; padding: 0 2px; background: #fff; }
+
+/* セルは角丸にしない（Excelらしく） */
+.table-scroll { border-radius: 0; }
+.work-table th.row-no select { border-radius: 0; }
+.work-table .inp-wrap .ok-btn { border-radius: 0; }
