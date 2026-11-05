@@ -245,6 +245,112 @@ def api_upload_doc():
     return jsonify(_doc_payload(doc))
 
 
+MAX_BATCH_FILES = 20
+
+
+@app.post("/api/docs/batch")
+def api_upload_batch():
+    """PDFをまとめて読み込む（要件定義書 F1）。読めないファイルはそのファイルだけエラーにして、ほかは続ける。"""
+    files = request.files.getlist("pdfs")
+    if not files:
+        raise AppError("PDFファイルが選択されていません。", "PDFをドラッグ＆ドロップするか、「ファイルを選択」で選んでください。", code="no_file")
+    if len(files) > MAX_BATCH_FILES:
+        raise AppError(f"一度に読み込めるのは {MAX_BATCH_FILES} ファイルまでです（{len(files)} ファイル選ばれています）。", code="too_many_files")
+    results = []
+    for file in files:
+        name = file.filename or ""
+        try:
+            if not name.lower().endswith(".pdf"):
+                raise AppError("PDF以外のファイルです。", "拡張子が .pdf のファイルを選んでください。", code="bad_extension")
+            data = file.read()
+            if len(data) > config.MAX_UPLOAD_MB * 1024 * 1024:
+                raise AppError(f"ファイルサイズが上限（{config.MAX_UPLOAD_MB}MB）を超えています。", code="too_large")
+            doc = store.add(data, name, inspect_pdf(data))
+            results.append({"ok": True, "filename": name, "doc_id": doc["id"], "page_count": doc["page_count"]})
+        except AppError as e:
+            results.append({"ok": False, "filename": name, "error": e.message, "hint": e.hint})
+    return jsonify({"ok": True, "results": results, "docs": _doc_list()})
+
+
+def _doc_summary_row(doc, con):
+    """一覧の1行分：状態と、あと何か所か。"""
+    st = store.load_status(doc)
+    pending = _unreviewed_pages(doc)
+    row = {
+        "doc_id": doc["id"],
+        "filename": doc["filename"],
+        "page_count": doc["page_count"],
+        "added_at": doc.get("added_at", ""),
+        "state": st["state"],
+        "ocr_pending_pages": pending,
+        "errors": 0,
+        "warnings": 0,
+        "need": 0,
+        "partner": "",
+        "slip_no": "",
+        "fiscal_month": "",
+        "closing_date": "",
+        "total": None,
+    }
+    if st["state"] == STATE_CONFIRMED:
+        row["status"] = "確定済み"
+    elif st["state"] == STATE_EXPORTED:
+        row["status"] = "出力済み"
+    elif pending and len(pending) == doc["page_count"]:
+        row["status"] = "未OCR"
+        return row
+    elif pending:
+        row["status"] = "OCR中"
+    try:
+        check = _check(doc, con)
+    except AppError as e:
+        row["status"] = "エラー"
+        row["error"] = e.message
+        return row
+    h = check["header"]
+    row.update(
+        {
+            "errors": check["errors"],
+            "warnings": check["warnings"],
+            "need": sum(1 for i in check["issues"] if i.get("kind") == "confirm"),
+            "partner": h.get("会社名") or h.get("会社名（伝票の文字）") or "",
+            "slip_no": h.get("伝票番号") or "",
+            "fiscal_month": h.get("fiscal_month") or "",
+            "closing_date": h.get("closing_date") or "",
+            "total": check["tax"]["total"] if check.get("tax") else None,
+        }
+    )
+    if "status" not in row:
+        match_errors = check["errors"] - row["need"]
+        row["status"] = "エラー" if match_errors > 0 else "要確認" if row["need"] > 0 else "問題なし"
+    return row
+
+
+def _doc_list():
+    con = _db()
+    try:
+        rows = [_doc_summary_row(d, con) for d in store.all_docs()]
+    finally:
+        con.close()
+    rows.sort(key=lambda r: r["added_at"], reverse=True)
+    return rows
+
+
+@app.get("/api/docs")
+def api_list_docs():
+    """伝票一覧（要件定義書 F2）。"""
+    return jsonify({"ok": True, "docs": _doc_list()})
+
+
+@app.delete("/api/docs/<doc_id>")
+def api_remove_doc(doc_id):
+    """一覧から外す（確認中の伝票だけ。確定済み・出力済みは記録を守るため外せない）。"""
+    doc = store.get(doc_id)
+    store.ensure_editable(doc)
+    store.remove(doc)
+    return jsonify({"ok": True, "docs": _doc_list()})
+
+
 @app.get("/api/docs/<doc_id>")
 def api_doc(doc_id):
     return jsonify(_doc_payload(store.get(doc_id)))
@@ -561,6 +667,7 @@ def _header_issues(doc, header):
                     "page": None,
                     "row": None,
                     "field": f,
+                    "kind": "confirm",
                 }
             )
     return out
@@ -703,6 +810,39 @@ def api_confirm(doc_id):
     status = {"state": STATE_CONFIRMED, "confirmed_at": confirmed_at, "return_id": rid}
     store.save_status(doc, status)
     return jsonify({"ok": True, "status": status, "check": check})
+
+
+@app.post("/api/docs/confirm-all")
+def api_confirm_all():
+    """「問題なし」の伝票をまとめて確定する（F7）。1件ずつ確定し、できなかった伝票はその理由を返す。"""
+    body = request.get_json(silent=True) or {}
+    doc_ids = body.get("doc_ids")
+    if not isinstance(doc_ids, list):
+        doc_ids = [r["doc_id"] for r in _doc_list() if r["status"] == "問題なし"]
+    done, skipped = [], []
+    for doc_id in dict.fromkeys(doc_ids):
+        doc = store.get(doc_id)
+        if store.load_status(doc)["state"] != STATE_REVIEWING or _unreviewed_pages(doc):
+            skipped.append({"filename": doc["filename"], "reason": "確認中ではない、またはOCRが終わっていません"})
+            continue
+        con = _db()
+        try:
+            check = _check(doc, con)
+            if check["errors"]:
+                skipped.append({"filename": doc["filename"], "reason": f"エラー {check['errors']} 件"})
+                continue
+            confirmed_at = now_str()
+            try:
+                with con:
+                    rid = _register_return(con, doc, check, confirmed_at)
+            except sqlite3.IntegrityError as e:
+                skipped.append({"filename": doc["filename"], "reason": f"登録できません（{e}）"})
+                continue
+        finally:
+            con.close()
+        store.save_status(doc, {"state": STATE_CONFIRMED, "confirmed_at": confirmed_at, "return_id": rid})
+        done.append(doc["filename"])
+    return jsonify({"ok": True, "confirmed": done, "skipped": skipped, "docs": _doc_list()})
 
 
 @app.delete("/api/docs/<doc_id>/confirm")
