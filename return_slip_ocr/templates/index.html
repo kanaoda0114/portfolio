@@ -23,11 +23,10 @@
 
     <nav class="steps" aria-label="作業の流れ">
       <a href="#step-upload" class="step"><span class="step-no">01</span><span><b>読み込む</b><small>Upload</small></span></a>
-      <a href="#step-read" class="step"><span class="step-no">02</span><span><b>読み取る</b><small>OCR</small></span></a>
-      <a href="#step-review" class="step"><span class="step-no">03</span><span><b>確認する</b><small>Review</small></span></a>
-      <a href="#step-confirm" class="step"><span class="step-no">04</span><span><b>照合・確定</b><small>Match &amp; Confirm</small></span></a>
-      <a href="#step-totals" class="step"><span class="step-no">05</span><span><b>集計する</b><small>Analytics</small></span></a>
+      <a href="#step-review" class="step"><span class="step-no">02</span><span><b>見比べて直す</b><small>Review</small></span></a>
+      <a href="#step-confirm" class="step"><span class="step-no">03</span><span><b>照合・確定</b><small>Match &amp; Confirm</small></span></a>
       <a href="#step-masters" class="step step-sub"><span class="step-no">DB</span><span><b>マスタ・売上</b><small>Master data</small></span></a>
+      <a href="#step-totals" class="step"><span class="step-no">…</span><span><b>精度の記録</b><small>OCR accuracy</small></span></a>
     </nav>
 
     <!-- PDFを読み込むと表示される -->
@@ -90,132 +89,159 @@
       <div id="error-hint" class="hint"></div>
     </div>
 
-    <section id="doc" hidden>
-      <span class="anchor" id="step-read"></span>
-      <div id="page-summary" class="summary"></div>
-
-      <div class="layout">
-        <div class="viewer panel">
-          <div class="panel-head">
-            <span id="viewer-title" class="panel-title"></span>
-            <span class="toggles">
-              <label class="switch"><input type="checkbox" id="show-boxes" checked> 枠を表示</label>
-              <label class="switch"><input type="checkbox" id="actual-size"> 等倍で表示</label>
+    <section id="doc" hidden aria-label="伝票の確認">
+      <!-- ============ 作業画面：左に伝票の画像、右に入力欄、下に確定バー ============ -->
+      <div class="work">
+        <div class="work-left">
+          <div class="work-left-head">
+            <b id="work-page-label">1ページ目</b>
+            <span class="muted">右の入力欄にポインタを乗せると、ここに枠が出ます</span>
+            <span class="zoom" role="group" aria-label="画像の大きさ">
+              <button type="button" id="zoom-out" class="small" aria-label="画像を小さくする">−</button>
+              <button type="button" id="zoom-fit" class="small">幅に合わせる</button>
+              <button type="button" id="zoom-in" class="small" aria-label="画像を大きくする">＋</button>
             </span>
           </div>
-          <div id="canvas-wrap" class="canvas-wrap"><canvas id="canvas"></canvas></div>
+          <div class="work-image" id="work-image">
+            <canvas id="work-canvas" role="img" aria-label="読み込んだ伝票の画像"></canvas>
+          </div>
         </div>
 
-        <div class="table-wrap panel">
-          <div class="filters">
-            <input type="search" id="filter-text" placeholder="文字で絞り込み">
-            <label class="switch"><input type="checkbox" id="filter-low"> 低信頼度のみ</label>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>No</th><th class="text">読み取った文字</th><th>信頼度</th>
-                <th>x</th><th>y</th><th>幅</th><th>高さ</th><th class="text">割り当て先</th>
-              </tr>
-            </thead>
-            <tbody id="rows"></tbody>
-          </table>
-          <div class="export">
-            <span>このページのOCR文字一覧</span>
-            <button type="button" id="export-csv">CSV</button>
-            <button type="button" id="export-json">JSON</button>
-            <label class="switch"><input type="checkbox" id="export-filtered"> 絞り込み中の行だけ</label>
-          </div>
+        <div class="work-right">
+          <section class="work-card" aria-labelledby="h-slip">
+            <span class="anchor" id="step-review"></span>
+            <div class="card-head"><h2 id="h-slip">伝票情報</h2></div>
+            <div id="work-header" class="form-grid"></div>
+          </section>
+
+          <section class="work-card" aria-labelledby="h-lines">
+            <div class="card-head">
+              <h2 id="h-lines">明細</h2>
+              <span id="work-line-count" class="pill muted"></span>
+            </div>
+            <div class="table-scroll">
+              <table class="work-table">
+                <thead>
+                  <tr>
+                    <th scope="col">行・区分</th>
+                    <th scope="col">品番</th>
+                    <th scope="col">枝番</th>
+                    <th scope="col">数量</th>
+                    <th scope="col">単価（税込）</th>
+                    <th scope="col">返品理由</th>
+                    <th scope="col" title="良品＝在庫に戻す、不良＝廃棄・メーカー返品。値引の行は税率">良品/不良・税率</th>
+                    <th scope="col">元の売上</th>
+                    <th scope="col"><span class="visually-hidden">削除</span></th>
+                  </tr>
+                </thead>
+                <tbody id="work-rows"></tbody>
+              </table>
+            </div>
+            <button type="button" id="work-add-row" class="secondary add-row-btn">＋ 行を追加</button>
+          </section>
+
+          <section class="work-card" aria-labelledby="h-total">
+            <span class="anchor" id="step-confirm"></span>
+            <div class="card-head"><h2 id="h-total">合計と照合</h2></div>
+            <div id="check-summary" class="check-summary"></div>
+            <details class="formula-details">
+              <summary>計算式を見る</summary>
+              <div id="tax-box" class="tax-box"></div>
+            </details>
+            <ul id="issue-list" class="issue-list" aria-label="確認が必要なところ"></ul>
+          </section>
         </div>
       </div>
 
-      <section id="slip-header" class="panel" data-step="03">
-        <h2>伝票の見出し <span id="header-state" class="pill muted"></span></h2>
-        <p class="note">OCRが読んだ候補を、原本と見比べて確認してください。違っていたら直してから「見出しを保存」を押します。</p>
-        <div id="header-fields" class="header-grid"></div>
-        <div class="actions">
-          <button type="button" id="header-use-ocr" class="secondary">OCRの候補をすべて入れる</button>
-          <button type="button" id="header-save">見出しを保存</button>
-          <span id="header-status" class="status"></span>
-        </div>
-      </section>
+      <div class="work-bar">
+        <span id="confirm-state" class="pill"></span>
+        <p id="work-progress" class="work-progress" role="status"></p>
+        <span id="confirm-status" class="status" role="status"></span>
+        <button type="button" id="check-refresh" class="secondary">照合し直す</button>
+        <button type="button" id="unconfirm-btn" class="secondary" hidden>確定を取り消す</button>
+        <button type="button" id="confirm-btn">この伝票を確定</button>
+      </div>
 
-      <section id="review" class="panel review" data-step="03">
-        <span class="anchor" id="step-review"></span>
-        <h2>明細の確認 <span id="review-page" class="pill"></span></h2>
-        <p id="review-note" class="note"></p>
-        <div id="assign-banner" class="assign-banner" hidden>
-          <span><b id="assign-target"></b> の枠を選択中です。画像の枠、またはOCR一覧の行をクリックすると追加／解除します。</span>
-          <button type="button" id="assign-done">選択を終わる</button>
-        </div>
-        <div id="unassigned" class="unassigned"></div>
-        <div class="view-switch" role="tablist" aria-label="明細の表示のしかた">
-          <button type="button" id="view-row" class="on" role="tab">1行ずつ（伝票と横並び）</button>
-          <button type="button" id="view-table" role="tab">一覧で見る</button>
-        </div>
-        <div id="row-editor" class="row-editor"></div>
-        <div class="review-scroll" id="review-table-wrap" hidden>
-          <table class="review-table">
-            <thead><tr id="review-head"></tr></thead>
-            <tbody id="review-rows"></tbody>
-          </table>
-        </div>
-        <div class="actions">
-          <button type="button" id="add-row" class="secondary">行を追加</button>
-          <button type="button" id="save-review">保存して判定</button>
-          <span id="save-status" class="status"></span>
-        </div>
-        <details class="rules">
-          <summary>判定のルール（表記差の扱い）</summary>
-          <ul>
-            <li><b>正解</b>は、原本を見てあなたが入力した値だけです。OCR結果や計算から自動で正解を作ることはしません。正解が空の欄は「未入力」として集計に含めません。</li>
-            <li><b>一致</b>: OCR結果と正解が文字どおり同じ。</li>
-            <li><b>一致（表記差）</b>: 次の表記だけをそろえると同じ。どれを使ったかを判定欄とCSVに記録します。
-              <ul>
-                <li>全角→半角（ＰＮ→PN、１２→12 など）</li>
-                <li>前後の空白・途中の空白を除く</li>
-                <li>ハイフンの種類（‐ – — − － → -）。長音「ー」や漢数字「一」は別の文字として扱います</li>
-                <li>数量・単価・金額のみ: 桁区切りカンマと通貨記号（¥, 円）を除く</li>
-              </ul>
-            </li>
-            <li><b>不一致</b>: そろえても違う（O と 0、I と 1 などの取り違えも不一致）。</li>
-            <li><b>不一致（読めず）</b>: 欄に枠が1つも割り当てられていない／文字が空。対象件数に含めます。</li>
-            <li>「原本も空欄」にチェックした欄は、OCRが何も読まなければ一致です。</li>
-            <li>正解率 = （一致 ＋ 一致（表記差））÷ 対象件数。完全一致率 = 一致 ÷ 対象件数。</li>
-          </ul>
-        </details>
-      </section>
-
-      <section id="confirm" class="panel" data-step="04">
-        <span class="anchor" id="step-confirm"></span>
-        <h2>照合・確定 <span id="confirm-state" class="pill"></span></h2>
-        <p class="note">マスタと売上データで照合した結果です。<b class="lv-error">エラー</b>が0件になると確定できます。<b class="lv-warn">警告</b>は、内容を確かめたうえで確定できます。</p>
-        <div id="check-summary" class="check-summary"></div>
-        <div id="tax-box" class="tax-box"></div>
-        <ul id="issue-list" class="issue-list"></ul>
-        <div class="actions">
-          <button type="button" id="check-refresh" class="secondary">照合し直す</button>
-          <button type="button" id="confirm-btn">この伝票を確定</button>
-          <button type="button" id="unconfirm-btn" class="secondary" hidden>確定を取り消す</button>
-          <span id="confirm-status" class="status"></span>
-        </div>
-      </section>
-
-      <section id="totals" class="panel" data-step="05">
+      <!-- ============ 詳しく：OCRの精度を測るための道具（ふだんの事務作業では使わない） ============ -->
+      <details id="accuracy" class="panel accuracy">
+        <summary>詳しく（OCRの精度の記録）</summary>
         <span class="anchor" id="step-totals"></span>
-        <h2>集計 <span class="pill muted">保存済みのページのみ</span></h2>
-        <div class="totals-grid">
-          <div>
-            <h3>項目別</h3>
-            <table class="stat-table" id="by-field"></table>
+        <p class="note">OCRがどの文字をどう読んだか、正しく読めた割合を記録するための道具です。ふだんの返品処理では開かなくて大丈夫です。</p>
+        <div id="page-summary" class="summary"></div>
+
+        <div class="layout">
+          <div class="viewer panel">
+            <div class="panel-head">
+              <span id="viewer-title" class="panel-title"></span>
+              <span class="toggles">
+                <label class="switch"><input type="checkbox" id="show-boxes" checked> 枠を表示</label>
+                <label class="switch"><input type="checkbox" id="actual-size"> 等倍で表示</label>
+              </span>
+            </div>
+            <div id="canvas-wrap" class="canvas-wrap"><canvas id="canvas" role="img" aria-label="OCRの文字枠つきの伝票の画像"></canvas></div>
           </div>
-          <div>
-            <h3>ページ別（正しく読めた件数 / 対象件数）</h3>
-            <div class="review-scroll"><table class="stat-table" id="by-page"></table></div>
+
+          <div class="table-wrap panel">
+            <div class="filters">
+              <label for="filter-text" class="visually-hidden">文字で絞り込み</label>
+              <input type="search" id="filter-text" placeholder="文字で絞り込み">
+              <label class="switch"><input type="checkbox" id="filter-low"> 低信頼度のみ</label>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">No</th><th scope="col" class="text">読み取った文字</th><th scope="col">信頼度</th>
+                  <th scope="col">x</th><th scope="col">y</th><th scope="col">幅</th><th scope="col">高さ</th><th scope="col" class="text">割り当て先</th>
+                </tr>
+              </thead>
+              <tbody id="rows"></tbody>
+            </table>
+            <div class="export">
+              <span>このページのOCR文字一覧</span>
+              <button type="button" id="export-csv">CSV</button>
+              <button type="button" id="export-json">JSON</button>
+              <label class="switch"><input type="checkbox" id="export-filtered"> 絞り込み中の行だけ</label>
+            </div>
           </div>
         </div>
-        <p class="note">記録ファイル（保存するたびに更新）: 記録フォルダ内の <code>review_cells.csv</code>（全欄のOCR結果・正解・判定）と <code>summary.csv</code>（項目別・ページ別の集計）</p>
-      </section>
+
+        <section id="review" class="panel review" aria-labelledby="h-review">
+          <h3 id="h-review">枠の割り当てと正解の記録</h3>
+          <span id="review-page" class="pill"></span>
+          <p id="review-note" class="note"></p>
+          <div id="assign-banner" class="assign-banner" hidden>
+            <span><b id="assign-target"></b> の枠を選択中です。画像の枠、またはOCR一覧の行をクリックすると追加／解除します。</span>
+            <button type="button" id="assign-done">選択を終わる</button>
+          </div>
+          <div id="unassigned" class="unassigned"></div>
+          <div class="review-scroll">
+            <table class="review-table">
+              <thead><tr id="review-head"></tr></thead>
+              <tbody id="review-rows"></tbody>
+            </table>
+          </div>
+          <div class="actions">
+            <button type="button" id="add-row" class="secondary">行を追加</button>
+            <button type="button" id="save-review">保存して判定</button>
+            <span id="save-status" class="status" role="status"></span>
+          </div>
+        </section>
+
+        <section id="totals" class="panel" aria-labelledby="h-totals">
+          <h3 id="h-totals">集計（保存済みのページのみ）</h3>
+          <div class="totals-grid">
+            <div>
+              <h4>項目別</h4>
+              <table class="stat-table" id="by-field"></table>
+            </div>
+            <div>
+              <h4>ページ別（正しく読めた件数 / 対象件数）</h4>
+              <div class="review-scroll"><table class="stat-table" id="by-page"></table></div>
+            </div>
+          </div>
+          <p class="note">記録ファイル（保存するたびに更新）: 記録フォルダ内の <code>review_cells.csv</code>（全欄のOCR結果・正解・判定）と <code>summary.csv</code>（項目別・ページ別の集計）</p>
+        </section>
+      </details>
     </section>
 
     <section id="masters" class="panel">

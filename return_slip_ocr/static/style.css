@@ -751,3 +751,203 @@ div.field-card > div { margin: 4px 0; }
 
 /* 読み込み欄では、手順番号の透かしがドロップ枠と重ならないようにする */
 .panel.upload::after { display: none; }
+
+/* ================================================================ 作業画面（左：伝票の画像、右：入力欄、下：確定バー） */
+.work { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 18px; align-items: start; }
+@media (max-width: 1200px) { .work { grid-template-columns: 1fr; } }
+
+.work-left {
+  position: sticky; top: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px; border-radius: var(--radius);
+  background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow);
+}
+@media (max-width: 1200px) { .work-left { position: static; } }
+.work-left-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; }
+.work-left-head .muted { flex: 1; min-width: 160px; }
+.zoom { display: inline-flex; gap: 4px; }
+.work-image {
+  max-height: calc(100vh - 170px); overflow: auto;
+  border: 1px solid var(--line); border-radius: 10px; background: #fff;
+}
+#work-canvas { display: block; }
+
+.work-right { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.work-card { padding: 16px 18px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.card-head h2 { margin: 0; font-size: 15px; }
+
+/* 伝票情報 */
+.form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; }
+.fg { display: flex; flex-direction: column; gap: 4px; }
+.fg label { font-size: 11px; font-weight: 800; color: var(--muted); letter-spacing: 0.04em; }
+.fg .hint { font-size: 11px; color: var(--muted); }
+.fg.need .hint { color: var(--warn); font-weight: 700; }
+.inp-wrap { display: flex; align-items: center; gap: 4px; }
+.inp-wrap input { flex: 1; min-width: 0; font-family: var(--mono); }
+input.need, td.need select { background: var(--warn-soft); border-color: #f0c47a; }
+td.need { background: #fffaf0; }
+.ok-btn {
+  flex: none; width: 30px; height: 30px; padding: 0;
+  font-size: 15px; font-weight: 800; color: #fff; background: var(--warn);
+  box-shadow: none; border-radius: 6px;
+}
+.ok-btn:hover { background: #9a5300; }
+
+/* 明細の表 */
+.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.work-table { min-width: 860px; font-size: 13px; }
+.work-table th, .work-table td { padding: 6px 6px; text-align: left; vertical-align: middle; white-space: nowrap; }
+.work-table thead th { font-size: 10px; }
+.work-table tbody tr:hover td, .work-table tbody tr:hover th { background: #f8f9fe; }
+.work-table th.row-no { font-family: var(--mono); color: var(--muted); text-align: center; width: 34px; background: var(--surface-2); }
+.work-table .cell-input { width: 100%; min-width: 64px; padding: 5px 7px; font-size: 13px; }
+.work-table td:nth-child(3) .cell-input { min-width: 110px; }
+.work-table td:nth-child(5) .cell-input, .work-table td:nth-child(6) .cell-input { text-align: right; }
+.work-table select {
+  font: inherit; font-size: 12px; padding: 5px 6px; max-width: 170px;
+  border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink);
+}
+.work-table select:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus); }
+.work-table .hint { display: block; font-size: 10px; font-weight: 700; color: var(--warn); }
+.work-table td.na { color: var(--line-strong); text-align: center; }
+.work-table tr.discount td, .work-table tr.discount th { background: #fbfbfe; }
+.cand-one { font-family: var(--mono); font-size: 12px; color: var(--ok); font-weight: 700; }
+.cand-none { font-size: 12px; color: var(--ng); font-weight: 700; }
+.row-ops { display: flex; align-items: center; gap: 6px; }
+.row-state {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+  font-size: 12px; font-weight: 800; color: #fff; cursor: help;
+}
+.row-state.ok { background: var(--ok); }
+.row-state.warn { background: var(--warn); }
+.row-state.ng { background: var(--ng); }
+.icon-btn { width: 26px; height: 26px; padding: 0; font-size: 12px; background: var(--surface); color: var(--muted); border: 1px solid var(--line-strong); box-shadow: none; }
+.icon-btn:hover { background: var(--ng-soft); color: var(--ng); border-color: #f1c4c6; }
+.add-row-btn { margin-top: 10px; }
+#work-rows tr.flash td, #work-rows tr.flash th { animation: flash 1.6s ease-out; }
+
+/* 合計と照合 */
+.formula-details { margin: 6px 0 12px; }
+.formula-details summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--accent); }
+.formula-details .tax-box { margin-top: 8px; }
+.issue-list li { padding: 0; }
+.issue-btn {
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px; align-items: baseline;
+  width: 100%; padding: 8px 12px; text-align: left;
+  font-weight: 500; font-size: 13px; color: var(--ink);
+  background: transparent; box-shadow: none; border-radius: 10px;
+}
+.issue-btn:hover { background: var(--surface-2); }
+.issue-msg { white-space: normal; }
+
+/* 下に固定の確定バー */
+.work-bar {
+  position: sticky; bottom: 0; z-index: 15;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 16px -4px 20px; padding: 12px 16px;
+  border-radius: 14px; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(6px);
+  border: 1px solid var(--line); box-shadow: 0 -4px 20px rgba(17, 26, 51, 0.08);
+}
+.work-progress { flex: 1; min-width: 220px; margin: 0; font-size: 14px; font-weight: 800; }
+.work-progress.todo { color: var(--warn); }
+.work-progress.ready { color: var(--ok); }
+.work-progress.done { color: var(--accent); }
+
+/* 詳しく（精度の記録） */
+.accuracy > summary { cursor: pointer; font-weight: 800; color: var(--ink-2); }
+.accuracy[open] > summary { margin-bottom: 12px; }
+.accuracy .panel { box-shadow: none; }
+
+/* 表の中の「画面に見せない文字」が、スクロール枠の外に飛び出してページが横にずれないようにする */
+.table-scroll { position: relative; }
+/* 明細の表を、右の列の幅に収まるように詰める */
+.work { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); }
+.work-table { min-width: 0; width: 100%; }
+.work-table th, .work-table td { padding: 5px 4px; }
+.work-table .cell-input { min-width: 0; padding: 5px 6px; }
+.work-table td:nth-child(3) .cell-input { min-width: 92px; }
+.work-table td:nth-child(4) .cell-input { width: 46px; }
+.work-table td:nth-child(5) .cell-input { width: 52px; }
+.work-table td:nth-child(6) .cell-input { width: 70px; }
+.work-table select { max-width: 132px; font-size: 12px; padding: 4px 4px; }
+.work-table td:nth-child(2) select { max-width: 64px; }
+.cand-one { font-size: 11px; white-space: normal; }
+
+/* 行番号のセルに、状態の印と区分（通常／値引）をまとめる */
+.work-table th.row-no { width: 72px; text-align: left; vertical-align: top; }
+.row-no-line { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+.work-table th.row-no select { max-width: 64px; }
+.work-table td:nth-child(2) .cell-input { min-width: 92px; }
+.work-table td:nth-child(3) .cell-input { width: 46px; min-width: 0; }
+.work-table td:nth-child(4) .cell-input { width: 52px; }
+.work-table td:nth-child(5) .cell-input { width: 70px; text-align: right; }
+.work-table td:nth-child(4) .cell-input { text-align: right; }
+.work-table td:nth-child(6) .cell-input { width: auto; text-align: left; }
+.work-table select { max-width: 120px; }
+
+.work-table td:nth-child(6) select { max-width: 96px; }
+
+/* 明細行：行番号・状態・区分を横1列にそろえ、欄の高さをそろえる */
+.work-table th.row-no { width: auto; min-width: 118px; vertical-align: middle; }
+.work-table th.row-no { display: table-cell; }
+.work-table th.row-no > * { vertical-align: middle; }
+.row-num { display: inline-block; min-width: 14px; font-family: var(--mono); font-size: 13px; color: var(--ink); margin-right: 4px; }
+.work-table th.row-no .row-state { margin-right: 6px; }
+.work-table th.row-no select { max-width: 60px; }
+.work-table td, .work-table th { vertical-align: middle; }
+.work-table .cell-input, .work-table select { height: 30px; box-sizing: border-box; }
+.work-table .inp-wrap { align-items: center; }
+.work-table td:nth-child(2) .cell-input { min-width: 100px; }
+.work-table td:nth-child(5) select { max-width: 104px; }
+.work-table td:nth-child(6) select { max-width: 72px; }
+
+.work-table td:nth-child(2) .cell-input { min-width: 84px; }
+.work-table th.row-no { min-width: 112px; }
+
+/* 行番号と区分のあいだをあける */
+.row-num { margin-right: 6px; }
+.work-table th.row-no .row-state { margin-right: 12px; }
+.work-table th.row-no { min-width: 124px; }
+.work-table td:nth-child(2) .cell-input { min-width: 78px; }
+.work-table td:nth-child(6) select { max-width: 68px; }
+
+/* ================================================================ 明細をExcelのセルのような見た目にする */
+.table-scroll { border: 1px solid #b9c0cf; border-radius: 4px; background: #fff; }
+.work-table { border-collapse: collapse; font-size: 13px; }
+.work-table th, .work-table td { border: 1px solid #d6dbe6; padding: 0; height: 34px; }
+.work-table thead th {
+  padding: 0 6px; height: 28px;
+  background: #eef1f6; color: var(--ink-2);
+  font-size: 11px; font-weight: 700; letter-spacing: 0; text-align: center;
+  border-bottom: 2px solid #b9c0cf;
+}
+.work-table th.row-no { padding: 0 6px; background: #f4f6fa; min-width: 124px; }
+.work-table tbody tr:hover td, .work-table tbody tr:hover th { background: inherit; }
+.work-table tbody tr:hover td { background: #fbfcff; }
+/* 入力欄はセルいっぱいに広げ、枠線は消す（セルそのものが枠） */
+.work-table .cell-input, .work-table td > select, .work-table .inp-wrap select {
+  width: 100%; min-width: 0; max-width: none; height: 100%; min-height: 32px;
+  padding: 0 6px; border: 0; border-radius: 0; background: transparent; box-shadow: none;
+}
+.work-table td:nth-child(2) .cell-input { min-width: 84px; }
+.work-table td:nth-child(3) .cell-input { width: 100%; }
+.work-table td:nth-child(4) .cell-input, .work-table td:nth-child(5) .cell-input { width: 100%; text-align: right; }
+.work-table td:nth-child(5) select, .work-table td:nth-child(6) select { max-width: none; }
+.work-table .inp-wrap { height: 100%; gap: 0; }
+.work-table .inp-wrap .ok-btn { height: 100%; width: 26px; border-radius: 0; }
+.work-table .cell-input:focus, .work-table select:focus { outline: 2px solid var(--accent); outline-offset: -2px; box-shadow: none; }
+.work-table td.need { background: #fff6dd; }
+.work-table td.need .cell-input, .work-table td.need select { background: transparent; }
+.work-table .hint { position: absolute; display: none; }
+.work-table td:nth-child(2) .cell-input { font-family: var(--mono); }
+.work-table td.na { color: #c3cad6; }
+.work-table td.cand-one, .work-table td.cand-none { padding: 0 6px; }
+.work-table td.row-ops { text-align: center; }
+.work-table .icon-btn { border: 0; background: transparent; }
+.work-table th.row-no select { border: 1px solid #d6dbe6; border-radius: 4px; height: 24px; padding: 0 2px; background: #fff; }
+
+/* セルは角丸にしない（Excelらしく） */
+.table-scroll { border-radius: 0; }
+.work-table th.row-no select { border-radius: 0; }
+.work-table .inp-wrap .ok-btn { border-radius: 0; }

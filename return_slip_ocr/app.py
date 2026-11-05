@@ -317,6 +317,15 @@ def api_page_ocr(doc_id, page):
             )
         store.save_page_review(doc, page, new_rows, _write_csvs)
         source_override = "reocr"
+    else:
+        # 初めてOCRしたページは、自動で割り当てた明細（OCRの値を最初から採用）をそのまま保存しておく。
+        # 人が書き換えなくても照合・チェックができるようにするため（要確認の欄は未確定のまま残る）
+        proposal = propose_rows(
+            items, config.TABLE_HEADERS, config.REVIEW_FIELDS, config.TABLE_END_LABELS, config.AUTO_ASSIGN_MIN_OVERLAP
+        )
+        rows = [{**r, "extra": rv.empty_extra()} for r in proposal["rows"]]
+        _auto_adopt(rows, items)
+        store.save_page_review(doc, page, rows, _write_csvs)
 
     return jsonify(_page_payload(doc, page, png_bytes, meta, ocr, source_override))
 
@@ -525,15 +534,52 @@ def _return_id(doc):
     return store.load_status(doc).get("return_id")
 
 
+def _effective_header(doc):
+    """チェックに使う見出し。まだ保存していなければ、OCRの候補をそのまま使う（最初からOCRの値を入れる）。"""
+    saved = store.load_header(doc)
+    if any((saved.get(f) or "").strip() for f in hx.HEADER_FIELDS):
+        return saved
+    prop = _header_proposal(doc) or {}
+    return {**{f: (prop[f]["value"] if prop.get(f) else "") for f in hx.HEADER_FIELDS}, "確認済み": []}
+
+
+def _header_issues(doc, header):
+    """OCRの自信が低い見出しで、人がまだ確認していないもの（要確認）。"""
+    prop = _header_proposal(doc) or {}
+    confirmed = set(header.get("確認済み") or [])
+    out = []
+    for f in hx.HEADER_FIELDS:
+        p = prop.get(f)
+        if not p or p["confidence"] is None or p["confidence"] >= config.LOW_CONFIDENCE or f in confirmed:
+            continue
+        if (header.get(f) or "").replace(" ", "") == p["value"].replace(" ", ""):  # 人が書き換えていない
+            out.append(
+                {
+                    "level": sc.ERROR,
+                    "check": "C1",
+                    "message": f"見出しの「{f}」はOCRの自信が低い（{p['confidence']:.2f}）ので、原本と見比べて確認してください。",
+                    "page": None,
+                    "row": None,
+                    "field": f,
+                }
+            )
+    return out
+
+
 def _check(doc, con=None):
     """伝票1枚分の照合とチェック（要件定義書 1.4版 F4・F9）。"""
     review = store.load_review(doc)
     own = con is None
     con = con or _db()
     try:
-        return rt.build_return(
-            con, store.load_header(doc), _judged_by_page(doc, review), _today(), exclude_return_id=_return_id(doc)
-        )
+        header = _effective_header(doc)
+        result = rt.build_return(con, header, _judged_by_page(doc, review), _today(), exclude_return_id=_return_id(doc))
+        extra = _header_issues(doc, header)
+        result["issues"] = extra + result["issues"]
+        result["errors"] += len(extra)
+        result["header_values"] = {f: header.get(f, "") for f in hx.HEADER_FIELDS}
+        result["header_confirmed"] = list(header.get("確認済み") or [])
+        return result
     finally:
         if own:
             con.close()
@@ -573,6 +619,10 @@ def api_save_header(doc_id):
         if not isinstance(v, str) or len(v) > 40:
             raise AppError(f"{k}が長すぎるか、文字列ではありません（40文字まで）。", code="bad_request")
         header[k] = v.strip()
+    confirmed = body.get("確認済み") or []
+    if not isinstance(confirmed, list) or not all(c in hx.HEADER_FIELDS for c in confirmed):
+        raise AppError("確認済みの項目の指定が正しくありません。", code="bad_request")
+    header["確認済み"] = list(dict.fromkeys(confirmed))
     store.save_header(doc, header)
     return jsonify({"ok": True, "header": header, "check": _check(doc)})
 
