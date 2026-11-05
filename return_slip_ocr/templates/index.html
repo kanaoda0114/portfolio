@@ -80,7 +80,7 @@
         <span class="dropzone-or">または</span>
         <span class="dropzone-btn">ファイルを選択</span>
         <span id="file-name" class="dropzone-file" aria-live="polite">選択されていません</span>
-        <input type="file" id="pdf" name="pdf" accept="application/pdf,.pdf" class="visually-hidden">
+        <input type="file" id="pdf" name="pdfs" accept="application/pdf,.pdf" multiple class="visually-hidden">
       </label>
     </form>
 
@@ -88,6 +88,36 @@
       <strong>エラー</strong> <span id="error-msg"></span>
       <div id="error-hint" class="hint"></div>
     </div>
+
+    <!-- ============ 伝票一覧（F2）：読み込んだ伝票の状態を見て、問題のあるものだけ開く ============ -->
+    <section id="slip-list" class="panel" aria-labelledby="h-list">
+      <div class="list-head">
+        <h2 id="h-list">伝票一覧</h2>
+        <div id="list-tabs" class="list-tabs" role="tablist" aria-label="状態で絞り込む"></div>
+        <div class="list-actions">
+          <button type="button" id="ocr-pending" class="secondary">未OCRをまとめてOCR</button>
+          <button type="button" id="confirm-all">問題なしの伝票をまとめて確定</button>
+        </div>
+      </div>
+      <div class="table-scroll list-scroll">
+        <table class="list-table">
+          <thead>
+            <tr>
+              <th scope="col">ファイル</th>
+              <th scope="col">状態</th>
+              <th scope="col">会社</th>
+              <th scope="col">伝票番号</th>
+              <th scope="col">計上月</th>
+              <th scope="col">あと</th>
+              <th scope="col">合計（税込）</th>
+              <th scope="col"><span class="visually-hidden">操作</span></th>
+            </tr>
+          </thead>
+          <tbody id="list-rows"></tbody>
+        </table>
+      </div>
+      <p id="list-status" class="list-status" role="status"></p>
+    </section>
 
     <section id="doc" hidden aria-label="伝票の確認">
       <!-- ============ 作業画面：左に伝票の画像、右に入力欄、下に確定バー ============ -->
