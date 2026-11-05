@@ -1897,3 +1897,55 @@ $("pdf").addEventListener("change", () => {
 });
 
 loadList();
+
+// ================================================================ 基幹システム取込用Excel（要件定義書 F5）
+
+async function loadSettings() {
+  try {
+    const s = await api("GET", "/api/settings");
+    $("export-dir").value = s.export_dir || "";
+    $("export-dir").placeholder = s.default_export_dir || "";
+  } catch (e) {
+    $("export-result").textContent = "出力先の設定を読めませんでした: " + e.message;
+  }
+}
+
+$("export-dir-save").addEventListener("click", async () => {
+  $("export-dir-save").disabled = true;
+  try {
+    const s = await api("PUT", "/api/settings", { export_dir: $("export-dir").value });
+    $("export-dir").value = s.export_dir;
+    $("export-result").replaceChildren(el("span", { class: "imp-ok", text: s.notice || `出力先を保存しました：${s.export_dir}` }));
+  } catch (e) {
+    $("export-result").replaceChildren(el("div", { class: "imp-ng", text: e.message }), el("div", { class: "muted", text: e.hint || "" }));
+  } finally {
+    $("export-dir-save").disabled = false;
+  }
+});
+
+$("export-btn").addEventListener("click", async () => {
+  const n = state.list.filter((d) => d.status === "確定済み").length;
+  if (!n) return $("export-result").replaceChildren(el("div", { class: "imp-ng", text: "出力できる伝票がありません。先に伝票を確定してください。" }));
+  if (!confirm(`確定済みの ${n} 件を、取込用Excelに出力します。出力した伝票は「出力済み」になり、確定を取り消せなくなります。よろしいですか？`)) return;
+  $("export-btn").disabled = true;
+  $("export-result").replaceChildren(el("span", { class: "muted", text: "出力中…" }));
+  try {
+    const res = await api("POST", "/api/export", {});
+    const parts = [
+      el("div", { class: "imp-ok", text: `${res.exported.length} 件（明細 ${res.rows} 行）を出力しました。` }),
+      el("div", { class: "export-path" }, el("span", { text: "ファイル：" }), el("code", { text: res.path })),
+    ];
+    if (res.notice) parts.push(el("div", { class: "muted", text: res.notice }));
+    if (res.warnings.length) parts.push(el("div", { class: "lv-warn", text: `警告 ${res.warnings.length} 件：` + res.warnings.map((w) => `${w.filename}：${w.message}`).join(" / ") }));
+    if (res.skipped.length) parts.push(el("div", { class: "muted", text: `出力しなかった伝票：` + res.skipped.map((s) => `${s.filename}（${s.reason}）`).join(" / ") }));
+    $("export-result").replaceChildren(...parts);
+    await loadList();
+    if (state.doc) { state.doc = await api("GET", `/api/docs/${state.doc.doc_id}`); renderHeader(); await loadCheck(); }
+  } catch (e) {
+    $("export-result").replaceChildren(el("div", { class: "imp-ng", text: e.message }), el("div", { class: "muted", text: e.hint || "" }));
+  } finally {
+    $("export-btn").disabled = false;
+  }
+});
+
+loadSettings();

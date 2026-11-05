@@ -983,3 +983,13 @@ td.need { background: #fffaf0; }
 .st-pill.ng { background: var(--ng-soft); color: var(--ng); }
 .st-pill.todo { background: #eef0f5; color: var(--muted); }
 .st-pill.done { background: var(--accent-soft); color: var(--accent); }
+
+/* 取込用Excelの出力 */
+.export-box { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.export-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.export-label { font-size: 12px; font-weight: 800; color: var(--muted); white-space: nowrap; }
+.export-dir { flex: 1; min-width: 240px; font-family: var(--mono); font-size: 13px; }
+.export-box .hint { display: block; margin-top: 6px; font-size: 12px; color: var(--muted); }
+.export-result { margin-top: 8px; font-size: 13px; }
+.export-result:empty { display: none; }
+.export-path code { font-size: 12px; word-break: break-all; }

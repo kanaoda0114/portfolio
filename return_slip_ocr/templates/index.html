@@ -117,6 +117,18 @@
         </table>
       </div>
       <p id="list-status" class="list-status" role="status"></p>
+
+      <!-- 基幹システム取込用Excel（F5）：確定済みの伝票をまとめて1つのExcelに -->
+      <div class="export-box">
+        <div class="export-row">
+          <label for="export-dir" class="export-label">出力先フォルダ</label>
+          <input type="text" id="export-dir" class="export-dir" placeholder="例: C:\返品取込 または \\サーバー\共有\返品取込" aria-describedby="export-dir-hint">
+          <button type="button" id="export-dir-save" class="secondary">出力先を保存</button>
+          <button type="button" id="export-btn">確定済みを取込用Excelに出力</button>
+        </div>
+        <small id="export-dir-hint" class="hint">無いフォルダを指定すると、自動で作ります。基幹システムが読みに行く共有フォルダなども指定できます。</small>
+        <div id="export-result" class="export-result" role="status"></div>
+      </div>
     </section>
 
     <section id="doc" hidden aria-label="伝票の確認">
