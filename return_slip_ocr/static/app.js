@@ -101,47 +101,8 @@ function confirmDiscard() {
 
 // ---------------------------------------------------------------- アップロード
 
-$("upload-form").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  clearError();
-  const file = $("pdf").files[0];
-  if (!file) return showError("PDFファイルが選択されていません。", "ファイルを選んでください。");
-  if (!file.name.toLowerCase().endsWith(".pdf")) {
-    return showError("PDF以外のファイルです: " + file.name, "拡張子が .pdf のファイルを選んでください。");
-  }
-  if (file.size > MAX_MB * 1024 * 1024) {
-    return showError(`ファイルサイズが上限（${MAX_MB}MB）を超えています。`, "小さいPDFを使ってください。");
-  }
-  if (!confirmDiscard()) return;
-
-  const body = new FormData();
-  body.append("pdf", file);
-  $("upload-form").classList.add("busy");
-  $("file-name").textContent = `${file.name} を読み込み中…`;
-  $("status").textContent = "アップロード中…";
-  try {
-    state.doc = await api("POST", "/api/docs", body);
-    state.headerDraft = null; // 新しい伝票なので、伝票情報の入力中の値は作り直す
-    state.hover = null;
-    setDirty(false);
-    $("status").textContent = "";
-    $("file-name").textContent = `読み込みました：${file.name}`;
-    $("doc").hidden = false;
-    $("doc-name").textContent = `${state.doc.filename}（全${state.doc.page_count}ページ）`;
-    $("records-folder").textContent = state.doc.records_folder;
-    renderDocSummary();
-    await openPage(1, true);
-    renderHeader();
-    await loadCheck();
-  } catch (e) {
-    $("status").textContent = "";
-    $("file-name").textContent = "読み込めませんでした。別のPDFを選んでください";
-    showError(e.message || String(e), e.hint);
-  } finally {
-    $("upload-form").classList.remove("busy");
-    $("pdf").value = ""; // 同じファイルをもう一度選んでも読み込めるように
-  }
-});
+// フォームは送信しない（ファイルを選んだ時点で uploadFiles() が読み込む）
+$("upload-form").addEventListener("submit", (ev) => ev.preventDefault());
 
 async function refreshDoc() {
   state.doc = await api("GET", `/api/docs/${state.doc.doc_id}`);
@@ -983,6 +944,7 @@ $("confirm-btn").addEventListener("click", async () => {
     const res = await api("POST", `/api/docs/${state.doc.doc_id}/confirm`);
     state.doc.status = res.status;
     $("confirm-status").textContent = `確定しました（${res.status.confirmed_at}）。返品の記録に登録しました。`;
+    loadList();
   } catch (e) {
     showError(e.message, e.hint);
   }
@@ -997,6 +959,7 @@ $("unconfirm-btn").addEventListener("click", async () => {
     const res = await api("DELETE", `/api/docs/${state.doc.doc_id}/confirm`);
     state.doc.status = res.status;
     $("confirm-status").textContent = "確定を取り消しました。";
+    loadList();
   } catch (e) {
     showError(e.message, e.hint);
   }
@@ -1230,24 +1193,11 @@ function renderTax() {
     zone.classList.remove("dragging");
     const files = [...ev.dataTransfer.files];
     if (!files.length) return;
-    const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
-    if (!pdfs.length) return showError("PDF以外のファイルです: " + files[0].name, "拡張子が .pdf のファイルを落としてください。");
-    if (files.length > 1) $("status").textContent = `今は1つずつ読み込みます（${pdfs[0].name} を読み込みます）。複数まとめての読み込みは次の周で作ります。`;
-    const dt = new DataTransfer();
-    dt.items.add(pdfs[0]);
-    $("pdf").files = dt.files;
-    zone.requestSubmit();
+    uploadFiles(files);
   });
 })();
 
 
-// ファイルを選んだら、すぐに読み込む（アップロードボタンは使わない）
-$("pdf").addEventListener("change", () => {
-  const f = $("pdf").files[0];
-  if (!f) return;
-  $("file-name").textContent = f.name;
-  $("upload-form").requestSubmit();
-});
 
 // ================================================================ 作業画面：左に伝票の画像、右に入力欄（Issue #13）
 //
@@ -1667,6 +1617,7 @@ async function doSave() {
     setDirty(saveAgain);
     $("confirm-status").textContent = `自動で保存しました（${res.saved_at.slice(11)}）`;
     await loadCheck();
+    loadList();
   } catch (e) {
     $("confirm-status").textContent = "保存できませんでした。";
     showError(e.message, e.hint);
@@ -1729,3 +1680,220 @@ $("zoom-out").addEventListener("click", () => { state.zoom = Math.max(0.5, (stat
 $("zoom-fit").addEventListener("click", () => { state.zoom = null; drawWork(); });
 
 $("accuracy").addEventListener("toggle", () => { if (state.pageData) { renderReview(); renderRows(); draw(); } });
+
+// ================================================================ 伝票一覧と、まとめて読み込み・OCR（要件定義書 F1・F2）
+
+state.list = []; // /api/docs の一覧
+state.listFilter = "all";
+state.ocrQueue = []; // OCR待ちの伝票ID
+state.ocrBusy = false;
+
+const STATUS_CLASS = { 問題なし: "ok", 要確認: "need", エラー: "ng", 未OCR: "todo", OCR中: "todo", 確定済み: "done", 出力済み: "done" };
+
+async function loadList(docs) {
+  try {
+    state.list = docs || (await api("GET", "/api/docs")).docs;
+  } catch (e) {
+    showError(e.message, e.hint);
+    return;
+  }
+  renderList();
+}
+
+function setListFilter(f) {
+  state.listFilter = f;
+  renderList();
+}
+
+function renderList() {
+  const counts = { all: state.list.length };
+  for (const d of state.list) counts[d.status] = (counts[d.status] || 0) + 1;
+  const tabs = [["all", "すべて"], ["要確認", "要確認"], ["エラー", "エラー"], ["問題なし", "問題なし"], ["確定済み", "確定済み"], ["出力済み", "出力済み"]];
+  $("list-tabs").replaceChildren(
+    ...tabs.map(([key, label]) =>
+      el(
+        "button",
+        {
+          type: "button",
+          role: "tab",
+          class: "list-tab " + (STATUS_CLASS[key] || "") + (state.listFilter === key ? " on" : ""),
+          "aria-selected": state.listFilter === key ? "true" : "false",
+          onclick: () => setListFilter(key),
+        },
+        el("span", { text: label }),
+        el("b", { text: counts[key] || 0 })
+      )
+    )
+  );
+  const rows = state.list.filter((d) => state.listFilter === "all" || d.status === state.listFilter);
+  const tbody = $("list-rows");
+  if (!rows.length) {
+    tbody.replaceChildren(el("tr", {}, el("td", { colspan: 8, class: "muted", text: state.list.length ? "この状態の伝票はありません。" : "まだ伝票を読み込んでいません。上の枠にPDFをドラッグ＆ドロップしてください。" })));
+  } else {
+    tbody.replaceChildren(
+      ...rows.map((d) => {
+        const opened = state.doc && state.doc.doc_id === d.doc_id;
+        const queued = state.ocrQueue.includes(d.doc_id) || (state.ocrBusy && state.ocrCurrent === d.doc_id);
+        return el(
+          "tr",
+          { class: (opened ? "current " : "") + "st-" + (STATUS_CLASS[d.status] || "") },
+          el("td", { class: "text" }, el("button", { type: "button", class: "link-btn", text: d.filename, title: "この伝票を開く", onclick: () => openDoc(d.doc_id) })),
+          el("td", {}, el("span", { class: "st-pill " + (STATUS_CLASS[d.status] || ""), text: queued && d.status === "未OCR" ? "OCR待ち" : d.status })),
+          el("td", { class: "text", text: d.partner || "" }),
+          el("td", { class: "mono", text: d.slip_no || "" }),
+          el("td", { class: "mono", text: d.fiscal_month ? d.fiscal_month.replace("-", "/") : "" }),
+          el("td", { class: "num", text: d.status === "要確認" ? `${d.need}か所` : d.status === "エラー" ? `${d.errors}件` : d.status === "問題なし" ? "0" : "" }),
+          el("td", { class: "num", text: d.total === null || d.total === undefined ? "" : yen(d.total) + " 円" }),
+          el(
+            "td",
+            { class: "ops" },
+            el("button", { type: "button", class: "small", text: opened ? "開いています" : "開く", disabled: opened, onclick: () => openDoc(d.doc_id) }),
+            d.state === "確認中"
+              ? el("button", {
+                  type: "button",
+                  class: "icon-btn",
+                  "aria-label": `${d.filename} を一覧から外す`,
+                  title: "一覧から外す",
+                  onclick: async () => {
+                    if (!confirm(`「${d.filename}」を一覧から外しますか？（読み取りの記録は残ります）`)) return;
+                    try {
+                      const res = await api("DELETE", `/api/docs/${d.doc_id}`);
+                      if (state.doc && state.doc.doc_id === d.doc_id) { state.doc = null; $("doc").hidden = true; }
+                      await loadList(res.docs);
+                    } catch (e) { showError(e.message, e.hint); }
+                  },
+                }, "✕")
+              : null
+          )
+        );
+      })
+    );
+  }
+  const okCount = counts["問題なし"] || 0;
+  $("confirm-all").disabled = okCount === 0;
+  $("confirm-all").textContent = okCount ? `問題なし ${okCount} 件をまとめて確定` : "問題なしの伝票をまとめて確定";
+}
+
+$("confirm-all").addEventListener("click", async () => {
+  const n = state.list.filter((d) => d.status === "問題なし").length;
+  if (!confirm(`「問題なし」の ${n} 件を確定します。確定すると返品の記録に登録されます。よろしいですか？`)) return;
+  $("confirm-all").disabled = true;
+  try {
+    const res = await api("POST", "/api/docs/confirm-all", {});
+    $("list-status").textContent = `${res.confirmed.length} 件を確定しました。` + (res.skipped.length ? ` ${res.skipped.length} 件は確定できませんでした（${res.skipped.map((s) => s.filename + "：" + s.reason).join(" / ")}）` : "");
+    await loadList(res.docs);
+    if (state.doc) { state.doc = await api("GET", `/api/docs/${state.doc.doc_id}`); renderHeader(); await loadCheck(); }
+  } catch (e) {
+    showError(e.message, e.hint);
+  }
+});
+
+// ---------------------------------------------------------------- 伝票を開く
+
+async function openDoc(docId) {
+  if (state.doc && state.doc.doc_id === docId) { $("doc").scrollIntoView({ behavior: "smooth" }); return; }
+  if (!confirmDiscard()) return;
+  clearError();
+  $("status").textContent = "伝票を開いています…";
+  try {
+    state.doc = await api("GET", `/api/docs/${docId}`);
+    state.headerDraft = null;
+    state.hover = null;
+    setDirty(false);
+    $("status").textContent = "";
+    $("doc").hidden = false;
+    $("doc-name").textContent = `${state.doc.filename}（全${state.doc.page_count}ページ）`;
+    $("records-folder").textContent = state.doc.records_folder;
+    renderDocSummary();
+    await openPage(1, true);
+    renderHeader();
+    await loadCheck();
+    renderList();
+    $("doc").scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (e) {
+    $("status").textContent = "";
+    showError(e.message, e.hint);
+  }
+}
+
+// ---------------------------------------------------------------- まとめて読み込み → 自動でOCR
+
+async function uploadFiles(files) {
+  const pdfs = [...files].filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+  if (!pdfs.length) return showError("PDF以外のファイルです: " + (files[0] ? files[0].name : ""), "拡張子が .pdf のファイルを選んでください。");
+  if (pdfs.length > 20) return showError(`一度に読み込めるのは 20 ファイルまでです（${pdfs.length} ファイル選ばれています）。`, "20ファイルずつに分けてください。");
+  clearError();
+  const body = new FormData();
+  for (const f of pdfs) body.append("pdfs", f);
+  $("upload-form").classList.add("busy");
+  $("file-name").textContent = pdfs.length === 1 ? `${pdfs[0].name} を読み込み中…` : `${pdfs.length} ファイルを読み込み中…`;
+  try {
+    const res = await api("POST", "/api/docs/batch", body);
+    const okIds = res.results.filter((r) => r.ok).map((r) => r.doc_id);
+    const bad = res.results.filter((r) => !r.ok);
+    $("file-name").textContent = `${okIds.length} ファイルを読み込みました` + (bad.length ? `（${bad.length} ファイルは読めませんでした）` : "");
+    if (bad.length) showError(bad.map((b) => `${b.filename}：${b.error}`).join(" / "), bad[0].hint);
+    await loadList(res.docs);
+    // 読み込んだ伝票を順番にOCRする。最初の1枚は、OCRが終わったら自動で開く
+    queueOcr(okIds, okIds[0]);
+  } catch (e) {
+    $("file-name").textContent = "読み込めませんでした。別のPDFを選んでください";
+    showError(e.message || String(e), e.hint);
+  } finally {
+    $("upload-form").classList.remove("busy");
+    $("pdf").value = "";
+  }
+}
+
+function queueOcr(docIds, openFirst) {
+  for (const id of docIds) if (!state.ocrQueue.includes(id)) state.ocrQueue.push(id);
+  state.openAfterOcr = state.openAfterOcr || openFirst || null;
+  renderList();
+  runOcrQueue();
+}
+
+async function runOcrQueue() {
+  if (state.ocrBusy) return;
+  state.ocrBusy = true;
+  let done = 0;
+  const total = state.ocrQueue.length;
+  try {
+    while (state.ocrQueue.length) {
+      const id = state.ocrQueue.shift();
+      state.ocrCurrent = id;
+      const d = state.list.find((x) => x.doc_id === id);
+      const pages = d ? d.ocr_pending_pages : [];
+      for (const p of pages) {
+        $("list-status").textContent = `OCR中… ${done + 1} / ${total} 件目（${d ? d.filename : ""} ${p}ページ目）`;
+        try {
+          const data = await api("POST", `/api/docs/${id}/pages/${p}/ocr`);
+          if (state.doc && state.doc.doc_id === id && p === state.page && !state.dirty) await renderPage(data);
+        } catch (e) {
+          $("list-status").textContent = `${d ? d.filename : id} の ${p}ページ目でエラー：${e.message}`;
+        }
+      }
+      done++;
+      await loadList();
+      if (state.openAfterOcr === id) { state.openAfterOcr = null; await openDoc(id); }
+      else if (state.doc && state.doc.doc_id === id) { await refreshDoc(); }
+    }
+    $("list-status").textContent = total ? `${total} 件のOCRが終わりました。一覧の「要確認」「エラー」の伝票を開いて直してください。` : "";
+  } finally {
+    state.ocrBusy = false;
+    state.ocrCurrent = null;
+    renderList();
+  }
+}
+
+// 「未OCR」の伝票が一覧にあれば、まとめてOCRできるようにする
+$("ocr-pending").addEventListener("click", () => {
+  const ids = state.list.filter((d) => d.status === "未OCR" || d.status === "OCR中").map((d) => d.doc_id);
+  if (!ids.length) return ($("list-status").textContent = "OCRが必要な伝票はありません。");
+  queueOcr(ids, null);
+});
+
+$("pdf").addEventListener("change", () => {
+  if ($("pdf").files.length) uploadFiles($("pdf").files);
+});
+
+loadList();

@@ -17,8 +17,9 @@ NUMERIC = {"数量", "単価"}
 ROUNDING = {"切り捨て": ROUND_DOWN, "四捨五入": ROUND_HALF_UP, "切り上げ": ROUND_CEILING}
 
 
-def _issue(level, check, message, page=None, row=None):
-    return {"level": level, "check": check, "message": message, "page": page, "row": row}
+def _issue(level, check, message, page=None, row=None, kind="match"):
+    """kind: "confirm" = 人が確認・入力すれば解決するもの、"match" = マスタ・売上との照合で見つかったもの"""
+    return {"level": level, "check": check, "message": message, "page": page, "row": row, "kind": kind}
 
 
 def _norm(text):
@@ -269,16 +270,16 @@ def build_return(con, header, judged_by_page, confirm_day, exclude_return_id=Non
 
     # ---- 伝票 ----
     if not company and not code:
-        issues.append(_issue(ERROR, "C1", "会社名（または会社コード）が入力されていません。"))
+        issues.append(_issue(ERROR, "C1", "会社名（または会社コード）が入力されていません。", kind="confirm"))
     if not slip_no:
-        issues.append(_issue(ERROR, "C1", "伝票番号が入力されていません。"))
+        issues.append(_issue(ERROR, "C1", "伝票番号が入力されていません。", kind="confirm"))
     ret_day = None
     if not raw_date.strip():
-        issues.append(_issue(ERROR, "C1", "返品日が入力されていません。"))
+        issues.append(_issue(ERROR, "C1", "返品日が入力されていません。", kind="confirm"))
     else:
         d = parse_date(raw_date)
         if d is None:
-            issues.append(_issue(ERROR, "C4", f"返品日「{raw_date}」を日付として読めません。"))
+            issues.append(_issue(ERROR, "C4", f"返品日「{raw_date}」を日付として読めません。", kind="confirm"))
         else:
             ret_day = date(*map(int, d.split("/")))
 
@@ -333,15 +334,16 @@ def build_return(con, header, judged_by_page, confirm_day, exclude_return_id=Non
                         f"未確定の欄があります（{'・'.join(undecided)}）。OCRの自信が低い「要確認」の欄は、原本と見比べてから、正しければ採用、違えば正解を入力してください。",
                         page,
                         r,
+                        kind="confirm",
                     )
                 )
             for f in need:
                 if vals.get(f) == "":
-                    issues.append(_issue(ERROR, "C1", f"{f}が空欄です。", page, r))
+                    issues.append(_issue(ERROR, "C1", f"{f}が空欄です。", page, r, kind="confirm"))
             if not discount and not ex.get("良品不良"):
-                issues.append(_issue(ERROR, "C1", "良品／不良が選ばれていません。", page, r))
+                issues.append(_issue(ERROR, "C1", "良品／不良が選ばれていません。", page, r, kind="confirm"))
             if discount and not ex.get("税率"):
-                issues.append(_issue(ERROR, "C1", "値引の税率（10% / 8% / 按分）が選ばれていません。", page, r))
+                issues.append(_issue(ERROR, "C1", "値引の税率（10% / 8% / 按分）が選ばれていません。", page, r, kind="confirm"))
 
             # 数値（C2）
             qty = 1 if discount else None
@@ -349,17 +351,17 @@ def build_return(con, header, judged_by_page, confirm_day, exclude_return_id=Non
             if not discount and vals.get("数量"):
                 n = parse_number(vals["数量"])
                 if n is None or n != n.to_integral_value() or n < 1:
-                    issues.append(_issue(ERROR, "C2", f"数量「{vals['数量']}」は1以上の整数にしてください。", page, r))
+                    issues.append(_issue(ERROR, "C2", f"数量「{vals['数量']}」は1以上の整数にしてください。", page, r, kind="confirm"))
                 else:
                     qty = int(n)
             if vals.get("単価"):
                 n = parse_number(vals["単価"])
                 if n is None:
-                    issues.append(_issue(ERROR, "C2", f"単価「{vals['単価']}」が数値ではありません。", page, r))
+                    issues.append(_issue(ERROR, "C2", f"単価「{vals['単価']}」が数値ではありません。", page, r, kind="confirm"))
                 elif discount and n >= 0:
-                    issues.append(_issue(ERROR, "C2", "値引の行は、単価（値引額）をマイナスにしてください。", page, r))
+                    issues.append(_issue(ERROR, "C2", "値引の行は、単価（値引額）をマイナスにしてください。", page, r, kind="confirm"))
                 elif not discount and n <= 0:
-                    issues.append(_issue(ERROR, "C2", f"単価「{vals['単価']}」は0より大きくしてください。", page, r))
+                    issues.append(_issue(ERROR, "C2", f"単価「{vals['単価']}」は0より大きくしてください。", page, r, kind="confirm"))
                 else:
                     price = n
 
@@ -368,7 +370,7 @@ def build_return(con, header, judged_by_page, confirm_day, exclude_return_id=Non
             reason = reasons.get(_norm(reason_text)) if reason_text else None
             if reason_text and reason is None:
                 issues.append(
-                    _issue(ERROR, "C3", f"返品理由「{reason_text}」が返品理由マスタにありません。選択肢から選んでください。", page, r)
+                    _issue(ERROR, "C3", f"返品理由「{reason_text}」が返品理由マスタにありません。選択肢から選んでください。", page, r, kind="confirm")
                 )
 
             line = {
@@ -421,7 +423,7 @@ def build_return(con, header, judged_by_page, confirm_day, exclude_return_id=Non
                     elif len(line["候補"]) == 1:
                         chosen = line["候補"][0]  # 1件だけなら照合先として表示する（確定するのは人）
                     elif len(line["候補"]) > 1:
-                        issues.append(_issue(ERROR, "S3", f"元の売上の候補が {len(line['候補'])} 件あります。どの売上の返品か選んでください。", page, r))
+                        issues.append(_issue(ERROR, "S3", f"元の売上の候補が {len(line['候補'])} 件あります。どの売上の返品か選んでください。", page, r, kind="confirm"))
                     if not line["候補"]:
                         where = f"売上番号 {sales_no_hint} に" if sales_no_hint else "返品日以前の売上に"
                         issues.append(_issue(ERROR, "S3", f"{where}、この品番・枝番の売上が見つかりません。", page, r))
@@ -443,7 +445,7 @@ def build_return(con, header, judged_by_page, confirm_day, exclude_return_id=Non
             lines.append(line)
 
     if not lines:
-        issues.append(_issue(ERROR, "C1", "明細が1行もありません。"))
+        issues.append(_issue(ERROR, "C1", "明細が1行もありません。", kind="confirm"))
 
     return {
         "header": {

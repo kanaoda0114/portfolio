@@ -391,3 +391,61 @@ def test_自信の低い見出しを確認済みにすると求めなくなる(c
     header = {**GOOD_HEADER, "確認済み": ["返品日"]}
     body = client.put(f"/api/docs/{doc_id}/header", json=header).get_json()
     assert not [i for i in body["check"]["issues"] if i.get("field")]
+
+
+# ---- 複数PDFのまとめて読み込みと伝票一覧（要件定義書 F1・F2） ----
+
+
+def test_複数のPDFをまとめて読み込み読めないものはそのファイルだけエラー(client):
+    files = {"pdfs": [(io.BytesIO(make_pdf("a")), "a.pdf"), (io.BytesIO(b"not a pdf"), "b.pdf"), (io.BytesIO(make_pdf("c")), "c.txt")]}
+    res = client.post("/api/docs/batch", data=files, content_type="multipart/form-data")
+    body = res.get_json()
+    assert res.status_code == 200, body
+    assert [r["ok"] for r in body["results"]] == [True, False, False]
+    assert "PDF" in body["results"][1]["error"]
+    assert [d["filename"] for d in body["docs"]] == ["a.pdf"]
+    assert body["docs"][0]["status"] == "未OCR"
+
+
+def test_伝票一覧の状態は要確認とエラーと問題なしに分かれる(client):
+    # 要確認：OCRの自信が低い欄が残っている（返品日・品番）
+    need = _upload_with_fixture(client)
+    client.put(f"/api/docs/{need}/pages/1/review", json={"rows": client.get(f"/api/docs/{need}/pages/1").get_json()["table"]["rows"]})
+    # エラー：商品マスタに無い品番
+    err = prepare(client, [normal_line(truth={"品番": "NOTE-999"})], header={**GOOD_HEADER, "伝票番号": "R-2"}, name="err.pdf", text="err")
+    # 問題なし
+    ok = prepare(client, [normal_line()], header={**GOOD_HEADER, "伝票番号": "R-3"}, name="ok.pdf", text="ok")
+    rows = {d["doc_id"]: d for d in client.get("/api/docs").get_json()["docs"]}
+    assert rows[need]["status"] == "要確認" and rows[need]["need"] >= 1
+    assert rows[err]["status"] == "エラー"
+    assert rows[ok]["status"] == "問題なし" and rows[ok]["total"] == 480
+    assert rows[ok]["partner"] == "株式会社サンプル商事"
+
+
+def test_問題なしの伝票だけまとめて確定できる(client):
+    ok1 = prepare(client, [normal_line()], name="a.pdf", text="a")
+    ok2 = prepare(client, [normal_line(truth={"数量": "1"})], header={**GOOD_HEADER, "伝票番号": "R-2"}, name="b.pdf", text="b")
+    bad = prepare(client, [normal_line(extra={"良品不良": ""})], header={**GOOD_HEADER, "伝票番号": "R-3"}, name="c.pdf", text="c")
+    body = client.post("/api/docs/confirm-all", json={}).get_json()
+    assert sorted(body["confirmed"]) == ["a.pdf", "b.pdf"]
+    assert body["skipped"] == []  # 問題なしだけを対象にするので、c.pdf は最初から含まれない
+    rows = {d["doc_id"]: d for d in body["docs"]}
+    assert (rows[ok1]["status"], rows[ok2]["status"], rows[bad]["status"]) == ("確定済み", "確定済み", "要確認")
+
+
+def test_再起動しても読み込んだPDFが一覧に残る(client):
+    doc_id = prepare(client, [normal_line()])
+    # サーバーの再起動をまねる：同じ記録フォルダで DocStore を作り直す
+    app_module.store = DocStore(app_module.store.records_dir)
+    rows = client.get("/api/docs").get_json()["docs"]
+    assert [d["doc_id"] for d in rows] == [doc_id]
+    assert rows[0]["status"] == "問題なし"
+
+
+def test_確認中の伝票は一覧から外せるが確定済みは外せない(client):
+    a = prepare(client, [normal_line()], name="a.pdf", text="a")
+    b = prepare(client, [normal_line()], header={**GOOD_HEADER, "伝票番号": "R-2"}, name="b.pdf", text="b")
+    client.post(f"/api/docs/{b}/confirm")
+    assert client.delete(f"/api/docs/{a}").status_code == 200
+    assert client.delete(f"/api/docs/{b}").status_code == 409
+    assert [d["filename"] for d in client.get("/api/docs").get_json()["docs"]] == ["b.pdf"]

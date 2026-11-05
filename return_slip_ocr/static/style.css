@@ -951,3 +951,35 @@ td.need { background: #fffaf0; }
 .table-scroll { border-radius: 0; }
 .work-table th.row-no select { border-radius: 0; }
 .work-table .inp-wrap .ok-btn { border-radius: 0; }
+
+/* ================================================================ 伝票一覧（F2） */
+.list-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.list-head h2 { margin: 0; font-size: 16px; }
+.list-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+.list-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; font-size: 12px; font-weight: 700;
+  background: var(--surface); color: var(--ink-2); border: 1px solid var(--line-strong); box-shadow: none;
+}
+.list-tab b { font-size: 12px; padding: 0 6px; border-radius: 999px; background: #eef0f5; color: var(--ink); }
+.list-tab.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.list-tab.on b { background: rgba(255, 255, 255, 0.2); color: #fff; }
+.list-tab.need:not(.on) { color: var(--warn); border-color: #f2d19b; }
+.list-tab.ng:not(.on) { color: var(--ng); border-color: #f5c6c9; }
+.list-tab.ok:not(.on) { color: var(--ok); border-color: #a9dcc4; }
+.list-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.list-status { font-size: 13px; color: var(--ink-2); margin: 6px 0 0; min-height: 1.2em; }
+
+.list-table th, .list-table td { padding: 7px 10px; text-align: left; white-space: nowrap; }
+.list-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.list-table td.mono { font-family: var(--mono); }
+.list-table td.ops { display: flex; gap: 6px; align-items: center; }
+.list-table tr.current td { background: var(--accent-soft); }
+.link-btn { padding: 0; font-weight: 700; color: var(--accent); background: transparent; box-shadow: none; text-align: left; white-space: normal; }
+.link-btn:hover { background: transparent; text-decoration: underline; }
+.st-pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+.st-pill.ok { background: var(--ok-soft); color: var(--ok); }
+.st-pill.need { background: var(--warn-soft); color: var(--warn); }
+.st-pill.ng { background: var(--ng-soft); color: var(--ng); }
+.st-pill.todo { background: #eef0f5; color: var(--muted); }
+.st-pill.done { background: var(--accent-soft); color: var(--accent); }

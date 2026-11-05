@@ -1,10 +1,12 @@
 """アップロードされたPDFと、その記録ファイル（records フォルダ）を管理する。
 
-- PDF本体はメモリ上にだけ置く（サーバーを再起動したら再アップロードが必要）
+- PDF本体も記録フォルダに保存する（original.pdf）ので、サーバーを再起動しても一覧に戻る
 - 記録は PDF の内容（SHA-256）ごとのフォルダに保存するので、
   同じPDFをアップロードし直すと、OCR結果と確認済みの正解がそのまま戻る
 
 records/<PDF名>_<ハッシュ先頭8桁>/
+    original.pdf     …  読み込んだPDF本体
+    doc.json         …  ファイル名・ページ数・読み込んだ日時
     ocr/page_01.json …  ページごとのOCR結果（文字・位置・信頼度）
     review.json      …  明細の割り当てと、人が確認した正解（アプリが読み込む元データ）
     header.json      …  会社名・会社コード・伝票番号・返品日・元売上番号（OCRの候補を人が確認して保存）
@@ -60,18 +62,60 @@ class DocStore:
         self._docs = {}
         self._lock = threading.Lock()
         self._save_lock = threading.Lock()
+        self._restore()
+
+    def _restore(self):
+        """前回までに読み込んだPDF（records/<PDF>/original.pdf）を、起動時に一覧へ戻す。"""
+        if not os.path.isdir(self.records_dir):
+            return
+        for name in sorted(os.listdir(self.records_dir)):
+            folder = os.path.join(self.records_dir, name)
+            path = os.path.join(folder, "original.pdf")
+            meta = os.path.join(folder, "doc.json")
+            if not (os.path.isfile(path) and os.path.isfile(meta)):
+                continue
+            try:
+                with open(meta, encoding="utf-8") as f:
+                    info = json.load(f)
+                with open(path, "rb") as f:
+                    data = f.read()
+            except (OSError, ValueError):
+                continue
+            doc = {"id": info["id"], "filename": info["filename"], "page_count": info["page_count"], "bytes": data, "folder": folder, "added_at": info.get("added_at", "")}
+            self._docs[doc["id"]] = doc
 
     def add(self, pdf_bytes, filename, page_count):
         doc_id = hashlib.sha256(pdf_bytes).hexdigest()[:16]
+        with self._lock:
+            existing = self._docs.get(doc_id)
+        if existing is not None:
+            return existing  # 同じPDFをもう一度読み込んだ：前回の記録をそのまま使う
         folder = os.path.join(self.records_dir, f"{_safe_stem(filename)}_{doc_id[:8]}")
         try:
             os.makedirs(os.path.join(folder, "ocr"), exist_ok=True)
+            # アプリを再起動しても一覧に残るように、PDF本体と情報を保存する
+            with open(os.path.join(folder, "original.pdf"), "wb") as f:
+                f.write(pdf_bytes)
+            _write_atomic(
+                os.path.join(folder, "doc.json"),
+                json.dumps({"id": doc_id, "filename": filename, "page_count": page_count, "added_at": now_str()}, ensure_ascii=False),
+            )
         except OSError as e:
             raise AppError(f"記録フォルダを作れません: {folder}（{e}）", status=500, code="records_dir")
-        doc = {"id": doc_id, "filename": filename, "page_count": page_count, "bytes": pdf_bytes, "folder": folder}
+        doc = {"id": doc_id, "filename": filename, "page_count": page_count, "bytes": pdf_bytes, "folder": folder, "added_at": now_str()}
         with self._lock:
             self._docs[doc_id] = doc
         return doc
+
+    def remove(self, doc):
+        """一覧から外す（記録フォルダは残す。確定済み・出力済みの記録を守るため）。"""
+        with self._lock:
+            self._docs.pop(doc["id"], None)
+        for name in ("original.pdf", "doc.json"):
+            try:
+                os.remove(os.path.join(doc["folder"], name))
+            except OSError:
+                pass
 
     def get(self, doc_id):
         with self._lock:
