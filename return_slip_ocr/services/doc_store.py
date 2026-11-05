@@ -7,7 +7,7 @@
 records/<PDF名>_<ハッシュ先頭8桁>/
     ocr/page_01.json …  ページごとのOCR結果（文字・位置・信頼度）
     review.json      …  明細の割り当てと、人が確認した正解（アプリが読み込む元データ）
-    header.json      …  伝票番号・返品日・取引先名（人が入力）
+    header.json      …  会社名・会社コード・伝票番号・返品日・元売上番号（OCRの候補を人が確認して保存）
     status.json      …  伝票の状態（確認中／確定済み／出力済み）と日時
     review_cells.csv …  全欄の OCR結果／正解／判定（見直し用）
     summary.csv      …  項目別・ページ別の集計
@@ -158,7 +158,7 @@ class DocStore:
             raise AppError(f"{name} を読めません（{e}）", f"{path} が壊れている可能性があります。", status=500, code="json_broken")
 
     def load_header(self, doc):
-        return self._load_json(doc, "header.json", {"伝票番号": "", "返品日": "", "取引先名": ""})
+        return self._load_json(doc, "header.json", {"会社名": "", "会社コード": "", "伝票番号": "", "返品日": "", "元売上番号": ""})
 
     def save_header(self, doc, header):
         _write_atomic(self._json_path(doc, "header.json"), json.dumps(header, ensure_ascii=False, indent=1))

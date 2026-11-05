@@ -117,15 +117,25 @@ def judge_rows(rows, items, fields, numeric_fields):
 # 明細ごとに人が入力・選択する項目（OCRの精度集計には含めない）
 LINE_KINDS = ("通常", "値引")
 CONDITIONS = ("", "良品", "不良")
+TAX_MODES = ("", "10", "8", "按分")  # 値引の行の税率（要件定義書 Q15）。空は未選択
+
+
+def _sales_ref(v):
+    """人が選んだ元の売上 {"sales_no": 文字, "line_no": 整数}。正しくなければ None。"""
+    if isinstance(v, dict) and isinstance(v.get("sales_no"), str) and isinstance(v.get("line_no"), int):
+        return {"sales_no": v["sales_no"][:40], "line_no": v["line_no"]}
+    return None
 
 
 def empty_extra(extra=None):
-    """明細の追加項目。保存されていない項目は初期値で補う。"""
+    """明細の、人が選ぶ項目。保存されていない項目は初期値で補う。
+    （返品理由は1.4版からOCRで読む欄になったので、ここには持たない）"""
     extra = extra or {}
     return {
         "明細区分": extra.get("明細区分") if extra.get("明細区分") in LINE_KINDS else "通常",
-        "返品理由": extra.get("返品理由") or "",
         "良品不良": extra.get("良品不良") if extra.get("良品不良") in CONDITIONS else "",
+        "税率": extra.get("税率") if extra.get("税率") in TAX_MODES else "",
+        "元売上": _sales_ref(extra.get("元売上")),
     }
 
 

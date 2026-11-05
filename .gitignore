@@ -23,3 +23,6 @@ desktop.ini
 
 # 試験用の架空サンプル（公開してよいもの）
 !return_slip_ocr/samples/*.pdf
+
+# Claude Code の起動設定（このPCの場所が書いてある）
+.claude/

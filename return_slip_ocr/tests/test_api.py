@@ -4,6 +4,7 @@ OCRは実行せず、OCR結果を記録フォルダに直接置いてから操�
 """
 import io
 import os
+from datetime import date
 
 import pymupdf
 import pytest
@@ -12,8 +13,9 @@ from openpyxl import load_workbook
 
 import app as app_module
 import config
+from services import db as dbm
 from services.doc_store import DocStore
-from tests.helpers import GOOD_HEADER, make_page, normal_line
+from tests.helpers import GOOD_HEADER, load_samples, make_page, normal_line
 
 
 LOCAL_URL = f"http://127.0.0.1:{config.PORT}"
@@ -35,6 +37,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "SETTINGS_PATH", str(records / "settings.json"))
     monkeypatch.setattr(config, "HISTORY_PATH", str(records / "export_history.csv"))
     monkeypatch.setattr(config, "DB_PATH", str(records / "returns.db"))
+    monkeypatch.setattr(app_module, "_today", lambda: date(2026, 11, 5))
+    con = dbm.connect(config.DB_PATH)  # 架空のマスタと売上データを入れておく
+    load_samples(con)
+    con.close()
     monkeypatch.setattr(app_module.app, "test_client_class", LocalClient)
     return app_module.app.test_client()
 
@@ -97,7 +103,7 @@ def test_16_エラーがあると確定できない(client):
 
 
 def test_警告だけなら確定できる(client):
-    doc_id = prepare(client, [normal_line(truth={"金額": "3700"})])
+    doc_id = prepare(client, [normal_line(truth={"単価": "230"})])  # 売ったときは240円
     res = client.post(f"/api/docs/{doc_id}/confirm")
     assert res.status_code == 200
     assert res.get_json()["check"]["warnings"] == 1
@@ -277,19 +283,85 @@ def test_見本Excelをダウンロードできる(client):
 
 
 def test_画面からマスタを取り込めて件数が返る(client):
-    data = "品番,枝番,商品名,単位,税率,有効\r\nNOTE-104,01,A5ノート,冊,10,\r\n".encode("utf-8")
+    before = client.get("/api/import/kinds").get_json()["counts"]["m_item"]
+    data = "品番,枝番,商品名,単位,税率,有効\r\nNEW-001,01,新しい商品,冊,10,\r\n".encode("utf-8")
     res = client.post("/api/import/item", data={"file": (io.BytesIO(data), "商品.csv")}, content_type="multipart/form-data")
     body = res.get_json()
     assert res.status_code == 200, body
     assert body["imported"] is True
-    assert body["counts"]["m_item"] == 1
+    assert body["counts"]["m_item"] == before + 1
 
 
 def test_エラーがあると400で理由の一覧を返す(client):
+    before = client.get("/api/import/kinds").get_json()["counts"]["m_item"]
     data = "品番,枝番,商品名,単位,税率,有効\r\nNOTE-104,01,A5ノート,冊,5,\r\n".encode("utf-8")
     res = client.post("/api/import/item", data={"file": (io.BytesIO(data), "商品.csv")}, content_type="multipart/form-data")
     body = res.get_json()
     assert res.status_code == 400
     assert body["code"] == "import_rejected"
     assert body["errors"][0] == {"row": 2, "column": "税率", "message": "10 または 8 にしてください"}
-    assert client.get("/api/import/kinds").get_json()["counts"]["m_item"] == 0
+    assert client.get("/api/import/kinds").get_json()["counts"]["m_item"] == before
+
+
+# ---- 1.4版：見出しの候補・返品の記録・照合（要件定義書 F3・F7・F9） ----
+
+
+def test_1ページ目のOCR結果から見出しの候補を返す(client):
+    import json
+
+    fixture = os.path.join(os.path.dirname(__file__), "fixtures", "sample_slip_ocr.json")
+    ocr = json.load(open(fixture, encoding="utf-8"))
+    doc_id = upload(client)
+    app_module.store.save_ocr(app_module.store.get(doc_id), 1, {"page": 1, "dpi": 200, "width": 1, "height": 1, "items": ocr["items"]})
+    prop = client.get(f"/api/docs/{doc_id}/header").get_json()["proposal"]
+    assert {k: v["value"] for k, v in prop.items()} == {
+        "会社名": "株式会社サンプル商事",
+        "会社コード": "100001",
+        "伝票番号": "R-000123",
+        "返品日": "2026/11/02",
+        "元売上番号": "S-24001",
+    }
+
+
+def _db_count(table):
+    con = dbm.connect(config.DB_PATH)
+    try:
+        return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_確定すると返品の記録に入り取り消すと外れる(client):
+    doc_id = prepare(client, [normal_line()])
+    client.post(f"/api/docs/{doc_id}/confirm")
+    assert (_db_count("t_return_slip"), _db_count("t_return_line")) == (1, 1)
+    client.delete(f"/api/docs/{doc_id}/confirm")
+    assert (_db_count("t_return_slip"), _db_count("t_return_line")) == (0, 0)
+
+
+def test_確定した返品の分だけ次の伝票で返品できる残りが減る(client):
+    a = prepare(client, [normal_line(truth={"数量": "8"})], name="a.pdf", text="a")
+    assert client.post(f"/api/docs/{a}/confirm").status_code == 200
+    b = prepare(client, [normal_line(truth={"数量": "3"})], header={**GOOD_HEADER, "伝票番号": "R-000200"}, name="b.pdf", text="b")
+    check = client.get(f"/api/docs/{b}/check").get_json()["check"]
+    assert any(i["check"] == "S5" for i in check["issues"])  # 10冊売って8冊返品済み → 残り2冊
+
+
+def test_チェック結果に返品理由の選択肢がつく(client):
+    doc_id = prepare(client, [normal_line()])
+    body = client.get(f"/api/docs/{doc_id}/check").get_json()
+    assert [r["name"] for r in body["reasons"]][:3] == ["サイズ違い", "色違い", "初期不良"]
+
+
+def test_OCRの値は最初から採用し要確認の欄だけ採用しない(client):
+    import json
+
+    fixture = os.path.join(os.path.dirname(__file__), "fixtures", "sample_slip_ocr.json")
+    ocr = json.load(open(fixture, encoding="utf-8"))
+    doc_id = upload(client)
+    app_module.store.save_ocr(app_module.store.get(doc_id), 1, {"page": 1, "dpi": 200, "width": 1, "height": 1, "items": ocr["items"]})
+    rows = client.get(f"/api/docs/{doc_id}/pages/1").get_json()["table"]["rows"]
+    first = rows[0]["cells"]
+    assert first["品番"]["adopt_ocr"] is False  # 「NOT E- 1 0 41」信頼度0.29 → 要確認
+    assert first["数量"]["adopt_ocr"] is True  # 「2」信頼度1.00 → 最初から採用
+    assert first["返品理由"]["adopt_ocr"] is True

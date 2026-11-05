@@ -20,6 +20,17 @@ def _center_y(it):
     return it["box"]["y"] + it["box"]["h"] / 2
 
 
+def _aligned_header(it, found, tol):
+    """文字枠の左端か右端が、ちょうど1つの見出しとそろっていれば、その見出し名を返す。"""
+    x0, x1 = it["box"]["x"], it["box"]["x"] + it["box"]["w"]
+    hits = {
+        lab
+        for lab, h in found.items()
+        if abs(h["box"]["x"] - x0) <= tol or abs(h["box"]["x"] + h["box"]["w"] - x1) <= tol
+    }
+    return hits.pop() if len(hits) == 1 else None
+
+
 def empty_cell():
     return {"ocr_nos": [], "assign": "manual", "truth": "", "truth_blank": False}
 
@@ -56,7 +67,12 @@ def propose_rows(items, headers, fields, end_labels, min_overlap):
     header_h = median(it["box"]["h"] for it in found.values())
 
     # 明細の終わり（「小計」の上端）。見つからなければページ下端まで
-    ends = [it["box"]["y"] for it in items if _label(it["text"]) in end_labels and it["box"]["y"] > header_bottom]
+    # 「合計（税込）」のように後ろに文字が続いても、終わりの印として扱う
+    ends = [
+        it["box"]["y"]
+        for it in items
+        if any(_label(it["text"]).startswith(e) for e in end_labels) and it["box"]["y"] > header_bottom
+    ]
     table_end = min(ends) if ends else float("inf")
 
     header_nos = {it["no"] for it in found.values()}
@@ -89,7 +105,14 @@ def propose_rows(items, headers, fields, end_labels, min_overlap):
                 if ratio > best_ratio:
                     best, best_ratio = lab, ratio
             if best_ratio < min_overlap:
-                unassigned.append(it["no"])
+                # 列の境界をまたいでいても、見出しと左端（または右端）がそろっていれば、その列とみなす
+                # （左寄せの品番や、右寄せの金額など、伝票によくある並べ方）
+                aligned = _aligned_header(it, found, header_h)
+                if aligned in fields:
+                    cells[aligned]["ocr_nos"].append(it["no"])
+                    cells[aligned]["assign"] = "auto"
+                else:
+                    unassigned.append(it["no"])
             elif best in fields:
                 cells[best]["ocr_nos"].append(it["no"])
                 cells[best]["assign"] = "auto"
