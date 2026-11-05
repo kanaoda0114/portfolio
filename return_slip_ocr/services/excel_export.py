@@ -35,16 +35,31 @@ def _number(v):
     return int(d) if d == d.to_integral_value() else float(d)
 
 
+def _ymd(iso):
+    """'2026-10-01' → '2026/10/01'（無ければ空）"""
+    return (iso or "").replace("-", "/")
+
+
 def slip_records(slip, filename, confirmed_at):
-    """build_slip() の結果を、列の値を引ける辞書のリストにする（明細1行＝1件）。"""
+    """build_return() の結果を、列の値を引ける辞書のリストにする（明細1行＝1件）。
+
+    import_format.json の "source" は、ここで作る辞書のキーを指す。
+    """
     h = slip["header"]
     out = []
     for i, line in enumerate(slip["lines"], start=1):
+        sales = line.get("元売上") or {}
         out.append(
             {
                 **h,
                 **line,
                 "行番号": i,
+                "計上月": _ymd(h.get("fiscal_month")),
+                "締め日": _ymd(h.get("closing_date")),
+                # 明細ごとに照合した元の売上（値引の行は無い）。見出しの「元売上番号」（OCRの候補）は上書きする
+                "元売上番号": sales.get("sales_no") or "",
+                "売上日": _ymd(sales.get("sales_date")),
+                "売上単価": sales.get("unit_price"),
                 "元ファイル名": filename,
                 "確定日時": confirmed_at,
             }

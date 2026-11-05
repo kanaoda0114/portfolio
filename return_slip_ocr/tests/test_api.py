@@ -86,7 +86,7 @@ def test_確定して出力すると出力済みになり履歴に残る(client)
     assert body["rows"] == 1
     assert os.path.exists(body["path"])
     ws = load_workbook(body["path"]).active
-    assert ws.cell(row=2, column=2).value == "R-000123"
+    assert ws.cell(row=2, column=3).value == "R-000123"  # 伝票番号（2.0版は3列目）
 
     # 20 出力履歴に追記され、状態が出力済みになる
     hist = open(config.HISTORY_PATH, encoding="utf-8-sig").read()
@@ -449,3 +449,22 @@ def test_確認中の伝票は一覧から外せるが確定済みは外せな�
     assert client.delete(f"/api/docs/{a}").status_code == 200
     assert client.delete(f"/api/docs/{b}").status_code == 409
     assert [d["filename"] for d in client.get("/api/docs").get_json()["docs"]] == ["b.pdf"]
+
+
+def test_一覧から確定済みをまとめて取込用Excelに出力できる(client, tmp_path):
+    a = prepare(client, [normal_line()], name="a.pdf", text="a")
+    b = prepare(client, [normal_line(truth={"数量": "1"})], header={**GOOD_HEADER, "伝票番号": "R-2"}, name="b.pdf", text="b")
+    c = prepare(client, [normal_line()], header={**GOOD_HEADER, "伝票番号": "R-3"}, name="c.pdf", text="c")  # 確定しない
+    client.post("/api/docs/confirm-all", json={"doc_ids": [a, b]})
+    out = tmp_path / "基幹取込"
+    client.put("/api/settings", json={"export_dir": str(out)})
+    body = client.post("/api/export", json={}).get_json()
+    assert body["ok"] and body["rows"] == 2
+    assert os.path.dirname(body["path"]) == str(out)
+    assert [s["filename"] for s in body["skipped"]] == ["c.pdf"]
+    ws = load_workbook(body["path"]).active
+    assert ws.title == "返品取込"
+    assert [c.value for c in ws[1]][:3] == ["伝票区分", "計上月", "伝票番号"]
+    assert sorted(ws.cell(row=r, column=3).value for r in (2, 3)) == ["R-000123", "R-2"]
+    rows = {d["doc_id"]: d["status"] for d in client.get("/api/docs").get_json()["docs"]}
+    assert (rows[a], rows[b], rows[c]) == ("出力済み", "出力済み", "問題なし")
