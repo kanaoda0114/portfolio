@@ -9,8 +9,10 @@ import io
 import json
 import logging
 import os
+import sqlite3
 import time
 import traceback
+from datetime import date
 
 from flask import Flask, jsonify, render_template, request, send_file
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
@@ -18,7 +20,9 @@ from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 import config
 from services import db as dbm
 from services import excel_export as xl
+from services import header_extract as hx
 from services import master_import as mi
+from services import returns as rt
 from services import review as rv
 from services import slip_check as sc
 from services.doc_store import STATE_CONFIRMED, STATE_EXPORTED, STATE_REVIEWING, DocStore, now_str
@@ -164,8 +168,24 @@ def _doc_payload(doc):
         "records_folder": doc["folder"],
         "summary": _summary(doc, review),
         "header": store.load_header(doc),
+        "header_proposal": _header_proposal(doc),
         "status": store.load_status(doc),
     }
+
+
+def _auto_adopt(rows, items):
+    """OCRの値を最初から入れておく。ただし自信の低い（要確認の）欄は採用せず、人の確認を待つ。
+
+    人がすでに正解を入れた欄・「原本も空欄」の欄はそのまま。
+    要確認の欄は未確定のまま残るので、照合・確定でエラーになり、確認を促す。
+    """
+    by_no = {it["no"]: it for it in items}
+    for row in rows:
+        for c in row["cells"].values():
+            confs = [by_no[n]["confidence"] for n in c.get("ocr_nos", []) if n in by_no]
+            if c.get("truth") or c.get("truth_blank") or not confs:
+                continue
+            c["adopt_ocr"] = min(confs) >= config.LOW_CONFIDENCE
 
 
 def _page_payload(doc, page, png_bytes, meta, ocr, source_override=None):
@@ -182,6 +202,7 @@ def _page_payload(doc, page, png_bytes, meta, ocr, source_override=None):
         rows, source = saved["rows"], "saved"
     elif proposal:
         rows, source = proposal["rows"], "auto"
+        _auto_adopt(rows, items)
     else:
         rows, source = [], "none"
 
@@ -286,6 +307,7 @@ def api_page_ocr(doc_id, page):
                     c["truth"] = old["cells"][f].get("truth", "")
                     c["truth_blank"] = old["cells"][f].get("truth_blank", False)
                 cells[f] = c
+            _auto_adopt([{"cells": cells}], items)
             new_rows.append(
                 {
                     "no_text": new["no_text"] if new else (old or {}).get("no_text", ""),
@@ -334,13 +356,14 @@ def _parse_rows(body, items):
         extra_in = (r or {}).get("extra") or {}
         if not isinstance(extra_in, dict):
             raise AppError(f"{i}行目の追加項目（extra）の形式が正しくありません。", code="bad_request")
-        reason = extra_in.get("返品理由") or ""
-        if not isinstance(reason, str) or len(reason) > 40:
-            raise AppError(f"{i}行目の返品理由が長すぎます（40文字まで）。", code="bad_request")
         if extra_in.get("明細区分", "通常") not in rv.LINE_KINDS:
             raise AppError(f"{i}行目の明細区分が不正です。", code="bad_request")
         if extra_in.get("良品不良", "") not in rv.CONDITIONS:
             raise AppError(f"{i}行目の良品／不良の値が不正です。", code="bad_request")
+        if extra_in.get("税率", "") not in rv.TAX_MODES:
+            raise AppError(f"{i}行目の値引の税率が不正です（10 / 8 / 按分）。", code="bad_request")
+        if extra_in.get("元売上") is not None and rv._sales_ref(extra_in.get("元売上")) is None:
+            raise AppError(f"{i}行目の元の売上の指定が正しくありません。", code="bad_request")
         no_text = (r or {}).get("no_text") or ""
         rows.append({"no_text": str(no_text)[:20], "cells": cells, "extra": rv.empty_extra(extra_in)})
     return rows
@@ -493,30 +516,27 @@ def api_save_settings():
     return jsonify(_settings_payload(notice))
 
 
-def _load_master():
-    try:
-        return sc.PartnerMaster.load(config.PARTNER_MASTER_PATH)
-    except OSError as e:
-        raise AppError(
-            f"取引先マスタを読めません（{e}）",
-            f"{config.PARTNER_MASTER_PATH} があるか確認してください。",
-            status=500,
-            code="master_missing",
-        )
+def _today():
+    """確定する日（テストで日付を固定できるように関数にしている）。"""
+    return date.today()
 
 
-def _check(doc, master=None, history=None):
-    """伝票1枚分のチェック結果（F4）と出力行を作る。"""
+def _return_id(doc):
+    return store.load_status(doc).get("return_id")
+
+
+def _check(doc, con=None):
+    """伝票1枚分の照合とチェック（要件定義書 1.4版 F4・F9）。"""
     review = store.load_review(doc)
-    return sc.build_slip(
-        store.load_header(doc),
-        _judged_by_page(doc, review),
-        config.REVIEW_FIELDS,
-        config.NUMERIC_FIELDS,
-        master or _load_master(),
-        config.AMOUNT_TOLERANCE,
-        xl.history_keys(_history_path()) if history is None else history,
-    )
+    own = con is None
+    con = con or _db()
+    try:
+        return rt.build_return(
+            con, store.load_header(doc), _judged_by_page(doc, review), _today(), exclude_return_id=_return_id(doc)
+        )
+    finally:
+        if own:
+            con.close()
 
 
 def _unreviewed_pages(doc):
@@ -524,6 +544,20 @@ def _unreviewed_pages(doc):
     review = store.load_review(doc)
     done_ocr = store.ocr_done_pages(doc)
     return [p for p in range(1, doc["page_count"] + 1) if p not in done_ocr or str(p) not in review["pages"]]
+
+
+def _header_proposal(doc):
+    """1ページ目のOCR結果から読んだ、伝票の見出しの候補（人が確認して保存する）。"""
+    ocr = store.load_ocr(doc, 1) if doc["page_count"] >= 1 else None
+    if not ocr:
+        return None
+    return hx.extract_header(ocr["items"])
+
+
+@app.get("/api/docs/<doc_id>/header")
+def api_get_header(doc_id):
+    doc = store.get(doc_id)
+    return jsonify({"ok": True, "header": store.load_header(doc), "proposal": _header_proposal(doc)})
 
 
 @app.put("/api/docs/<doc_id>/header")
@@ -534,7 +568,7 @@ def api_save_header(doc_id):
     if not isinstance(body, dict):
         raise AppError("送信データの形式が正しくありません。", code="bad_request")
     header = {}
-    for k in sc.HEADER_FIELDS:
+    for k in hx.HEADER_FIELDS:
         v = body.get(k) or ""
         if not isinstance(v, str) or len(v) > 40:
             raise AppError(f"{k}が長すぎるか、文字列ではありません（40文字まで）。", code="bad_request")
@@ -546,12 +580,46 @@ def api_save_header(doc_id):
 @app.get("/api/docs/<doc_id>/check")
 def api_check(doc_id):
     doc = store.get(doc_id)
-    return jsonify({"ok": True, "check": _check(doc), "unreviewed_pages": _unreviewed_pages(doc)})
+    con = _db()
+    try:
+        check = _check(doc, con)
+        reasons = rt.reason_choices(con)
+    finally:
+        con.close()
+    return jsonify({"ok": True, "check": check, "unreviewed_pages": _unreviewed_pages(doc), "reasons": reasons})
+
+
+def _register_return(con, doc, check, confirmed_at):
+    """確定した返品を、返品伝票・返品明細に登録する（F7）。戻り値: 返品ID"""
+    h = check["header"]
+    cur = con.execute(
+        """INSERT INTO t_return_slip (partner_code, slip_no, return_date, fiscal_month, closing_date, late, source_file, status, confirmed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            h["会社コード"], h["伝票番号"], h["返品日"].replace("/", "-"), h["fiscal_month"], h["closing_date"],
+            1 if h["late"] else 0, doc["filename"], STATE_CONFIRMED, confirmed_at,
+        ),
+    )
+    rid = cur.lastrowid
+    for i, ln in enumerate(check["lines"], start=1):
+        ref = ln["元売上"] or {}
+        con.execute(
+            """INSERT INTO t_return_line (return_id, line_no, line_kind, sales_no, sales_line_no, item_no, branch_no, qty, unit_price,
+                                          amount, tax_mode, tax_rate, reason_code, reason_text, condition)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                rid, i, ln["明細区分"], ref.get("sales_no"), ref.get("line_no"),
+                ln["品番"] or None, ln["枝番"] if ln["明細区分"] == "通常" else None,
+                ln["数量"], str(ln["単価"]), ln["金額"], ln["税率の決め方"], ln["税率"],
+                ln["理由コード"] or "99", ln["返品理由（伝票の文字）"], ln["良品不良"] or None,
+            ),
+        )
+    return rid
 
 
 @app.post("/api/docs/<doc_id>/confirm")
 def api_confirm(doc_id):
-    """伝票を確定する（F7）。エラーがあれば確定しない。"""
+    """伝票を確定する（F7）。エラーがあれば確定しない。確定した返品はデータベースに登録する。"""
     doc = store.get(doc_id)
     store.ensure_editable(doc)
     pending = _unreviewed_pages(doc)
@@ -561,34 +629,51 @@ def api_confirm(doc_id):
             "全ページで「保存して判定」を押してから確定してください。",
             code="pages_pending",
         )
-    check = _check(doc)
-    if check["errors"]:
-        return jsonify(
-            {
-                "ok": False,
-                "code": "check_failed",
-                "error": f"入力チェックでエラーが {check['errors']} 件あるため、確定できません。",
-                "hint": "エラーの内容を直してから、もう一度確定してください。",
-                "check": check,
-            }
-        ), 400
-    status = {"state": STATE_CONFIRMED, "confirmed_at": now_str()}
+    con = _db()
+    try:
+        check = _check(doc, con)
+        if check["errors"]:
+            return jsonify(
+                {
+                    "ok": False,
+                    "code": "check_failed",
+                    "error": f"チェックでエラーが {check['errors']} 件あるため、確定できません。",
+                    "hint": "エラーの内容を直してから、もう一度確定してください。",
+                    "check": check,
+                }
+            ), 400
+        confirmed_at = now_str()
+        try:
+            with con:  # 返品伝票と明細をまとめて登録する（途中で失敗したら何も登録しない）
+                rid = _register_return(con, doc, check, confirmed_at)
+        except sqlite3.IntegrityError as e:
+            raise AppError(f"返品の記録を登録できませんでした（{e}）", "同じ会社・伝票番号の返品がすでに確定されていないか確認してください。", status=409, code="register_failed")
+    finally:
+        con.close()
+    status = {"state": STATE_CONFIRMED, "confirmed_at": confirmed_at, "return_id": rid}
     store.save_status(doc, status)
     return jsonify({"ok": True, "status": status, "check": check})
 
 
 @app.delete("/api/docs/<doc_id>/confirm")
 def api_unconfirm(doc_id):
-    """確定を取り消す（F7）。出力済みの伝票は取り消せない。"""
+    """確定を取り消す（F7）。出力済みの伝票は取り消せない。返品の記録からも外す。"""
     doc = store.get(doc_id)
-    state = store.load_status(doc)["state"]
-    if state == STATE_EXPORTED:
+    st = store.load_status(doc)
+    if st["state"] == STATE_EXPORTED:
         raise AppError(
             "出力済みの伝票は、確定を取り消せません。",
             "取込済みのデータとずれないよう、販売管理システム側で修正してください。",
             status=409,
             code="already_exported",
         )
+    if st.get("return_id") is not None:
+        con = _db()
+        try:
+            with con:
+                con.execute("DELETE FROM t_return_slip WHERE return_id = ?", (st["return_id"],))
+        finally:
+            con.close()
     status = {"state": STATE_REVIEWING}
     store.save_status(doc, status)
     return jsonify({"ok": True, "status": status})
@@ -596,57 +681,64 @@ def api_unconfirm(doc_id):
 
 @app.post("/api/export")
 def api_export():
-    """確定済みの伝票をまとめて1つのExcelに出力する（F5）。"""
+    """確定済みの伝票をまとめて1つのExcelに出力する（F5。返品計上Excelは次の周で作る）。"""
     body = request.get_json(silent=True) or {}
     doc_ids = body.get("doc_ids")
     if not isinstance(doc_ids, list) or not doc_ids:
         doc_ids = [d["id"] for d in store.all_docs()]
 
-    master = _load_master()
-    history = xl.history_keys(_history_path())
     fmt = xl.load_format(config.IMPORT_FORMAT_PATH)
-
     exported, skipped, warnings, records = [], [], [], []
-    for doc_id in dict.fromkeys(doc_ids):
-        doc = store.get(doc_id)
-        status = store.load_status(doc)
-        if status["state"] != STATE_CONFIRMED:
-            reason = "出力済みです" if status["state"] == STATE_EXPORTED else "確定していません"
-            skipped.append({"filename": doc["filename"], "reason": reason})
-            continue
-        check = _check(doc, master, history)
-        if check["errors"]:
-            msgs = [i["message"] for i in check["issues"] if i["level"] == sc.ERROR]
-            skipped.append({"filename": doc["filename"], "reason": " / ".join(msgs)})
-            continue
-        for i in check["issues"]:
-            if i["level"] == sc.WARNING:
-                warnings.append({"filename": doc["filename"], **i})
-        records.extend(xl.slip_records(check, doc["filename"], status["confirmed_at"].replace("-", "/")))
-        exported.append((doc, check))
+    con = _db()
+    try:
+        for doc_id in dict.fromkeys(doc_ids):
+            doc = store.get(doc_id)
+            status = store.load_status(doc)
+            if status["state"] != STATE_CONFIRMED:
+                reason = "出力済みです" if status["state"] == STATE_EXPORTED else "確定していません"
+                skipped.append({"filename": doc["filename"], "reason": reason})
+                continue
+            check = _check(doc, con)
+            if check["errors"]:
+                msgs = [i["message"] for i in check["issues"] if i["level"] == sc.ERROR]
+                skipped.append({"filename": doc["filename"], "reason": " / ".join(msgs)})
+                continue
+            for i in check["issues"]:
+                if i["level"] == sc.WARNING:
+                    warnings.append({"filename": doc["filename"], **i})
+            records.extend(xl.slip_records(check, doc["filename"], status["confirmed_at"].replace("-", "/")))
+            exported.append((doc, check, status))
 
-    if not exported:
-        return jsonify(
-            {
-                "ok": False,
-                "code": "nothing_to_export",
-                "error": "出力できる伝票がありません。",
-                "hint": "伝票を確定してから出力してください。",
-                "skipped": skipped,
-            }
-        ), 400
+        if not exported:
+            return jsonify(
+                {
+                    "ok": False,
+                    "code": "nothing_to_export",
+                    "error": "出力できる伝票がありません。",
+                    "hint": "伝票を確定してから出力してください。",
+                    "skipped": skipped,
+                }
+            ), 400
 
-    # 初回（records/exports がまだ無い）や、設定したあとでフォルダが消された場合は作り直す。
-    # ドライブが無い（ネットワークドライブが切れている等）ときは出力しない。
-    export_dir = _export_dir()
-    notice = _prepare_export_dir(export_dir)
+        # 初回（records/exports がまだ無い）や、設定したあとでフォルダが消された場合は作り直す。
+        # ドライブが無い（ネットワークドライブが切れている等）ときは出力しない。
+        export_dir = _export_dir()
+        notice = _prepare_export_dir(export_dir)
 
-    head, rows = xl.build_table(records, fmt)
-    name = xl.export_file_name()
-    path = os.path.join(export_dir, name)
-    xl.write_xlsx(path, fmt, head, rows)
+        head, rows = xl.build_table(records, fmt)
+        name = xl.export_file_name()
+        path = os.path.join(export_dir, name)
+        xl.write_xlsx(path, fmt, head, rows)
 
-    exported_at = now_str()
+        exported_at = now_str()
+        with con:
+            for _, _, st in exported:
+                con.execute(
+                    "UPDATE t_return_slip SET status = ?, exported_at = ? WHERE return_id = ?",
+                    (STATE_EXPORTED, exported_at, st.get("return_id")),
+                )
+    finally:
+        con.close()
     xl.append_history(
         _history_path(),
         [
@@ -658,11 +750,10 @@ def api_export():
                 "出力ファイル名": name,
                 "元PDFファイル名": d["filename"],
             }
-            for d, c in exported
+            for d, c, _ in exported
         ],
     )
-    for d, _ in exported:
-        st = store.load_status(d)
+    for d, _, st in exported:
         store.save_status(d, {**st, "state": STATE_EXPORTED, "exported_at": exported_at, "export_file": name})
 
     return jsonify(
@@ -670,7 +761,7 @@ def api_export():
             "ok": True,
             "file": name,
             "path": path,
-            "exported": [d["filename"] for d, _ in exported],
+            "exported": [d["filename"] for d, _, _ in exported],
             "rows": len(rows),
             "skipped": skipped,
             "warnings": warnings,

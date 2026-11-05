@@ -36,15 +36,16 @@ LOW_CONFIDENCE = 0.5
 # 記録（OCR結果のキャッシュ・確認結果・CSV）を保存するフォルダ
 RECORDS_DIR = os.environ.get("OCR_RECORDS_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "records")
 
-# 正解を確認する明細の項目
-REVIEW_FIELDS = ["品番", "枝番", "数量", "単価", "金額"]
+# OCRで読んで、正解を確認する明細の項目（要件定義書 1.4版 F3）
+# 金額は読まない（数量×単価で計算する）
+REVIEW_FIELDS = ["品番", "枝番", "数量", "単価", "返品理由"]
 
 # 比較時に桁区切りカンマ・通貨記号を表記差として扱う項目
-NUMERIC_FIELDS = {"数量", "単価", "金額"}
+NUMERIC_FIELDS = {"数量", "単価"}
 
-# 明細表の見出し（列の位置を決めるのに使う）と、明細の終わりを示す文字
-TABLE_HEADERS = ["No", "品番", "枝番", "品名", "数量", "単価", "金額"]
-TABLE_END_LABELS = ["小計"]
+# 明細表の見出し（列の位置を決めるのに使う）と、明細の終わりを示す文字（この文字で始まる行で終わり）
+TABLE_HEADERS = ["No", "品番", "枝番", "品名", "数量", "単価", "金額", "返品理由"]
+TABLE_END_LABELS = ["小計", "合計", "総合計"]
 
 # 文字枠の幅のうち、この割合以上が1つの列に入っているときだけ自動で割り当てる
 AUTO_ASSIGN_MIN_OVERLAP = 0.8
@@ -66,11 +67,8 @@ HISTORY_PATH = os.path.join(RECORDS_DIR, "export_history.csv")
 # Excelの列の並び・列名・コード値
 IMPORT_FORMAT_PATH = os.path.join(_HERE, "import_format.json")
 
-# 取引先名 → 取引先コード の対応表
-PARTNER_MASTER_PATH = os.path.join(_HERE, "masters", "取引先マスタ.csv")
-
-# 数量×単価 と 金額 のずれを許す幅（円）。これを超えると警告（C3）
-AMOUNT_TOLERANCE = 1
+# ※1.2版の「取引先マスタ.csv」と「金額の許容差（C3）」は、1.4版でデータベースのマスタと
+#   数量×単価の計算に置き換えたため、なくした（docs/要件定義書.md 1.4版）
 
 # マスタ・売上データ・返品記録のデータベース（docs/データ設計書.md）
 DB_PATH = os.path.join(RECORDS_DIR, "returns.db")
