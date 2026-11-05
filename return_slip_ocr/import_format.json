@@ -1,8 +1,9 @@
 {
-  "_説明": "販売管理システム取込用Excelの書式（docs/取込フォーマット定義書.md）。取込先が変わったら、このファイルだけ直す。",
+  "_説明": "基幹システム取込用Excelの書式（docs/取込フォーマット定義書.md 2.0版）。取込先のシステムが変わったら、このファイルだけ直す。列の順番・列名・コード値を変えられる。",
   "sheet_name": "返品取込",
   "columns": [
     {"name": "伝票区分", "type": "text", "fixed": "20"},
+    {"name": "計上月", "type": "text", "source": "計上月"},
     {"name": "伝票番号", "type": "text", "source": "伝票番号"},
     {"name": "返品日", "type": "date", "source": "返品日"},
     {"name": "取引先コード", "type": "text", "source": "取引先コード"},
@@ -12,10 +13,14 @@
     {"name": "品番", "type": "text", "source": "品番"},
     {"name": "枝番", "type": "text", "source": "枝番"},
     {"name": "数量", "type": "number", "source": "数量"},
-    {"name": "単価", "type": "number", "source": "単価"},
-    {"name": "金額", "type": "number", "source": "金額"},
+    {"name": "単価（税込）", "type": "number", "source": "単価"},
+    {"name": "金額（税込）", "type": "number", "source": "金額"},
+    {"name": "税率", "type": "number", "source": "税率"},
+    {"name": "理由コード", "type": "text", "source": "理由コード"},
     {"name": "返品理由", "type": "text", "source": "返品理由"},
     {"name": "良品不良区分", "type": "text", "source": "良品不良", "codes": {"良品": "1", "不良": "2"}},
+    {"name": "元売上番号", "type": "text", "source": "元売上番号"},
+    {"name": "売上日", "type": "date", "source": "売上日"},
     {"name": "元ファイル名", "type": "text", "source": "元ファイル名"},
     {"name": "確定日時", "type": "text", "source": "確定日時"}
   ]
