@@ -20,6 +20,9 @@ const state = {
   hoverCell: null,
   ocrRunning: false,
   cancelOcr: false,
+  check: null, // /api/docs/<id>/check の応答（照合とチェックの結果）
+  reasons: [], // 返品理由マスタの選択肢
+  status: null, // 伝票の状態（確認中／確定済み／出力済み）
 };
 
 // ---------------------------------------------------------------- 共通
@@ -84,6 +87,8 @@ function setDirty(v) {
   state.dirty = v;
   $("save-status").textContent = v ? "未保存の変更があります" : $("save-status").textContent;
   $("save-status").classList.toggle("warn", v);
+  // 直したのに古いエラーが出たままだと迷うので、照合結果が「保存前の古いもの」だとわかるようにする
+  document.body.classList.toggle("unsaved", v);
 }
 
 window.addEventListener("beforeunload", (ev) => {
@@ -111,28 +116,36 @@ $("upload-form").addEventListener("submit", async (ev) => {
 
   const body = new FormData();
   body.append("pdf", file);
-  $("upload-btn").disabled = true;
+  $("upload-form").classList.add("busy");
+  $("file-name").textContent = `${file.name} を読み込み中…`;
   $("status").textContent = "アップロード中…";
   try {
     state.doc = await api("POST", "/api/docs", body);
     setDirty(false);
     $("status").textContent = "";
+    $("file-name").textContent = `読み込みました：${file.name}`;
     $("doc").hidden = false;
     $("doc-name").textContent = `${state.doc.filename}（全${state.doc.page_count}ページ）`;
     $("records-folder").textContent = state.doc.records_folder;
     renderDocSummary();
     await openPage(1, true);
+    renderHeader();
+    await loadCheck();
   } catch (e) {
     $("status").textContent = "";
+    $("file-name").textContent = "読み込めませんでした。別のPDFを選んでください";
     showError(e.message || String(e), e.hint);
   } finally {
-    $("upload-btn").disabled = false;
+    $("upload-form").classList.remove("busy");
+    $("pdf").value = ""; // 同じファイルをもう一度選んでも読み込めるように
   }
 });
 
 async function refreshDoc() {
   state.doc = await api("GET", `/api/docs/${state.doc.doc_id}`);
   renderDocSummary();
+  renderHeader();
+  await loadCheck();
 }
 
 // ---------------------------------------------------------------- ページ
@@ -495,69 +508,104 @@ function renderReview() {
       : [])
   );
 
+  // 人が決める項目は、横にスクロールしなくても見えるように左側に置く
   $("review-head").replaceChildren(
     el("th", { text: "行" }),
-    el("th", { text: "No（OCR）" }),
-    ...FIELDS.map((f) => el("th", { text: f })),
+    el("th", { text: "① 人が決める項目・元の売上" }),
+    ...FIELDS.map((f, k) => el("th", { text: k === 0 ? `② OCRの確認：${f}` : f })),
     el("th", { text: "" })
   );
 
   const tbody = $("review-rows");
   if (!state.rows.length) {
     tbody.replaceChildren(
-      el("tr", {}, el("td", { colspan: FIELDS.length + 3, class: "muted", text: d.ocr ? "明細の行がありません。「行を追加」してください。" : "" }))
+      el("tr", {}, el("td", { colspan: FIELDS.length + 4, class: "muted", text: d.ocr ? "明細の行がありません。「行を追加」してください。" : "" }))
     );
   } else {
     tbody.replaceChildren(...state.rows.map((r, i) => reviewRow(r, i)));
   }
-  $("add-row").disabled = !d.ocr;
-  $("save-review").disabled = !d.ocr;
+  renderRowEditor();
+  $("add-row").disabled = !d.ocr || isLocked();
+  $("save-review").disabled = !d.ocr || isLocked();
 }
 
 function reviewRow(r, i) {
   return el(
     "tr",
     {},
-    el("td", { class: "center", text: i + 1 }),
-    el("td", { class: "center", text: r.no_text || "" }),
+    el(
+      "td",
+      { class: "center row-head" },
+      el("b", { class: "row-no", text: i + 1 }),
+      r.no_text ? el("div", { class: "muted", text: `No ${r.no_text}` }) : null,
+      el("button", {
+        type: "button",
+        class: "small adopt-all",
+        text: "OCRを全部採用",
+        title: "この行で、正解が空でOCRが読めている欄を、すべて「OCRを採用」にします（原本と見比べて正しいときだけ）",
+        disabled: isLocked() || !FIELDS.some((f) => canAdopt(r.cells[f])),
+        onclick: () => adoptAll(r),
+      })
+    ),
+    extraCell(r, i),
     ...FIELDS.map((f) => reviewCell(r, i, f)),
-    el("td", {}, el("button", { type: "button", class: "small danger", text: "行を削除", onclick: () => deleteRow(i) }))
+    el("td", {}, el("button", { type: "button", class: "small danger", text: "行を削除", disabled: isLocked(), onclick: () => deleteRow(i) }))
   );
 }
 
-function reviewCell(r, i, f) {
+function canAdopt(c) {
+  return !c.truth_blank && !(c.truth || "").trim() && !c.adopt_ocr && !!cellOcr(c).text;
+}
+
+function adoptAll(r) {
+  for (const f of FIELDS) {
+    const c = r.cells[f];
+    if (canAdopt(c)) {
+      c.adopt_ocr = true;
+      markStale(c);
+    }
+  }
+  renderReview();
+}
+
+function reviewCell(r, i, f, tag = "td") {
   const c = r.cells[f];
   const ocr = cellOcr(c);
   const isTarget = state.assign && state.assign.row === i && state.assign.field === f;
   const result = c.stale ? null : c.result;
+  const extraClass = tag === "td" ? "" : " field-card";
 
   const truthInput = el("input", {
     type: "text",
     class: "truth",
     value: c.truth,
     placeholder: c.truth_blank ? "（原本も空欄）" : "原本の値",
-    disabled: c.truth_blank,
+    disabled: c.truth_blank || isLocked(),
     oninput: (ev) => {
       c.truth = ev.target.value;
       markStale(c);
       td.querySelector(".judge").replaceChildren(judgeView(c, null));
-      td.className = cellClass(null, isTarget);
+      td.className = cellClass(null, isTarget) + extraClass;
     },
   });
 
   const td = el(
-    "td",
+    tag,
     {
-      class: cellClass(result, isTarget),
-      onmouseenter: () => { state.hoverCell = { row: i, field: f }; draw(); },
-      onmouseleave: () => { state.hoverCell = null; draw(); },
+      class: cellClass(result, isTarget) + extraClass,
+      onmouseenter: () => { state.hoverCell = { row: i, field: f }; draw(); drawRowCrop(); },
+      onmouseleave: () => { if (!td.contains(document.activeElement)) { state.hoverCell = null; draw(); drawRowCrop(); } },
+      onfocusin: () => { state.hoverCell = { row: i, field: f }; draw(); drawRowCrop(); },
+      onfocusout: () => { state.hoverCell = null; draw(); drawRowCrop(); },
     },
+    tag === "td" ? null : el("div", { class: "field-name", text: f }),
     el(
       "div",
       { class: "ocr-line" },
       el("span", { class: "tag " + (c.assign === "auto" ? "auto" : "manual"), text: c.assign === "auto" ? "自動" : "手動" }),
       el("span", { class: "ocr-text", text: ocr.text || "（枠なし）" }),
-      ocr.minConf !== null ? el("span", { class: "muted", text: ` ${ocr.minConf.toFixed(2)}` }) : null
+      ocr.minConf !== null ? el("span", { class: "muted", text: ` ${ocr.minConf.toFixed(2)}` }) : null,
+      ocr.minConf !== null && ocr.minConf < LOW_CONF ? el("span", { class: "tag low", text: "要確認", title: "OCRの自信が低い文字です。原本と必ず見比べてください" }) : null
     ),
     el(
       "div",
@@ -597,6 +645,17 @@ function reviewCell(r, i, f) {
       }),
       " 原本も空欄"
     ),
+    el(
+      "label",
+      { class: "small-label adopt", title: "原本と見比べてOCRの読み取りが正しいときに選びます。正解を入力した欄は、正解が優先されます" },
+      el("input", {
+        type: "checkbox",
+        checked: c.adopt_ocr,
+        disabled: !ocr.text || c.truth_blank || isLocked(),
+        onchange: (ev) => { c.adopt_ocr = ev.target.checked; markStale(c); renderReview(); },
+      }),
+      " OCRを採用"
+    ),
     el("div", { class: "judge" }, judgeView(c, result))
   );
   return td;
@@ -619,8 +678,8 @@ function judgeView(c, result) {
 
 function newRow() {
   const cells = {};
-  for (const f of FIELDS) cells[f] = { ocr_nos: [], assign: "manual", truth: "", truth_blank: false, stale: true };
-  return { no_text: "", cells };
+  for (const f of FIELDS) cells[f] = { ocr_nos: [], assign: "manual", truth: "", truth_blank: false, adopt_ocr: false, stale: true };
+  return { no_text: "", cells, extra: { 明細区分: "通常", 良品不良: "", 税率: "", 元売上: null } };
 }
 
 $("add-row").addEventListener("click", () => {
@@ -655,8 +714,12 @@ $("save-review").addEventListener("click", async () => {
       rows: state.rows.map((r) => ({
         no_text: r.no_text,
         cells: Object.fromEntries(
-          FIELDS.map((f) => [f, { ocr_nos: r.cells[f].ocr_nos, assign: r.cells[f].assign, truth: r.cells[f].truth, truth_blank: r.cells[f].truth_blank }])
+          FIELDS.map((f) => [
+            f,
+            { ocr_nos: r.cells[f].ocr_nos, assign: r.cells[f].assign, truth: r.cells[f].truth, truth_blank: r.cells[f].truth_blank, adopt_ocr: !!r.cells[f].adopt_ocr },
+          ])
         ),
+        extra: r.extra || {},
       })),
     };
     const res = await api("PUT", `/api/docs/${state.doc.doc_id}/pages/${state.page}/review`, body);
@@ -671,6 +734,7 @@ $("save-review").addEventListener("click", async () => {
     renderRows();
     renderDocSummary();
     draw();
+    await loadCheck();
   } catch (e) {
     $("save-status").textContent = "保存できませんでした。";
     showError(e.message, e.hint);
@@ -790,4 +854,592 @@ $("export-json").addEventListener("click", () => {
     items: exportItems(),
   };
   download(exportBaseName() + ".json", JSON.stringify(out, null, 2), "application/json");
+});
+
+// ================================================================ 1.4版：見出し・照合・確定・マスタ（要件定義書 F3・F7・F8・F9）
+
+const HEADER_FIELDS = ["会社名", "会社コード", "伝票番号", "返品日", "元売上番号"];
+const COUNT_KEYS = { partner: ["m_partner"], item: ["m_item"], reason: ["m_return_reason"], sales: ["t_sales", "t_sales_line"] };
+
+function isLocked() {
+  return !!(state.doc && state.doc.status && state.doc.status.state !== "確認中");
+}
+
+// ---------------------------------------------------------------- 伝票の見出し
+
+function renderHeader() {
+  if (!state.doc) return;
+  const saved = state.doc.header || {};
+  const prop = state.doc.header_proposal || {};
+  const hasSaved = HEADER_FIELDS.some((f) => (saved[f] || "").trim());
+  const lows = HEADER_FIELDS.filter((f) => prop[f] && prop[f].confidence !== null && prop[f].confidence < LOW_CONF);
+  $("header-state").textContent = isLocked()
+    ? "確定済みのため編集できません"
+    : hasSaved
+    ? "保存済み"
+    : lows.length
+    ? `OCRの値を入れました。黄色の${lows.length}項目は原本と見比べてから保存してください`
+    : "OCRの値を入れました。原本と見比べてから保存してください";
+  $("header-fields").replaceChildren(
+    ...HEADER_FIELDS.map((f, i) => {
+      const p = prop[f];
+      const low = p && p.confidence !== null && p.confidence < LOW_CONF;
+      // まだ保存していないときは、OCRの値を最初から入れておく（自信の低いものは黄色で注意を促す）
+      const value = hasSaved ? saved[f] || "" : p ? p.value : "";
+      const input = el("input", { type: "text", id: `hdr-${i}`, "data-field": f, value, placeholder: "（原本を見て入力）", disabled: isLocked() });
+      return el(
+        "div",
+        { class: "hdr-field" + (low ? " low" : "") },
+        el("label", { for: `hdr-${i}`, text: f + (f === "会社コード" || f === "元売上番号" ? "（書いてあれば）" : "") }),
+        input,
+        el(
+          "div",
+          { class: "ocr-hint" },
+          p
+            ? [
+                el("span", { text: "OCR: " }),
+                el("b", { text: p.value }),
+                el("span", { class: "muted", text: ` 信頼度 ${p.confidence.toFixed(2)}` }),
+                low ? el("span", { class: "tag low", text: "要確認" }) : null,
+                el("button", { type: "button", class: "small", text: "使う", disabled: isLocked(), onclick: () => { input.value = p.value; input.focus(); } }),
+              ]
+            : el("span", { class: "muted", text: "OCRでは見つかりませんでした" })
+        )
+      );
+    })
+  );
+  $("header-use-ocr").disabled = isLocked() || !Object.values(prop).some(Boolean);
+  $("header-save").disabled = isLocked();
+}
+
+$("header-use-ocr").addEventListener("click", () => {
+  const prop = state.doc.header_proposal || {};
+  document.querySelectorAll("#header-fields input").forEach((inp) => {
+    const p = prop[inp.dataset.field];
+    if (p && !inp.value) inp.value = p.value;
+  });
+  $("header-status").textContent = "候補を入れました。原本と見比べてから保存してください。";
+});
+
+$("header-save").addEventListener("click", async () => {
+  clearError();
+  const body = {};
+  document.querySelectorAll("#header-fields input").forEach((inp) => (body[inp.dataset.field] = inp.value.trim()));
+  $("header-save").disabled = true;
+  try {
+    const res = await api("PUT", `/api/docs/${state.doc.doc_id}/header`, body);
+    state.doc.header = res.header;
+    $("header-status").textContent = "見出しを保存しました。";
+    renderHeader();
+    await loadCheck();
+  } catch (e) {
+    showError(e.message, e.hint);
+  } finally {
+    $("header-save").disabled = isLocked();
+  }
+});
+
+// ---------------------------------------------------------------- 照合とチェック
+
+async function loadCheck() {
+  if (!state.doc) return;
+  try {
+    const data = await api("GET", `/api/docs/${state.doc.doc_id}/check`);
+    state.check = data.check;
+    state.reasons = data.reasons || [];
+    state.unreviewedPages = data.unreviewed_pages || [];
+  } catch (e) {
+    state.check = null;
+    showError(e.message, e.hint);
+  }
+  renderCheck();
+  if (state.pageData) renderReview();
+}
+
+function checkLine(page, row) {
+  return state.check ? state.check.lines.find((l) => l.page === page && l.row === row) : null;
+}
+
+function rowIssues(page, row) {
+  return state.check ? state.check.issues.filter((i) => i.page === page && i.row === row) : [];
+}
+
+function yen(v) {
+  return v === null || v === undefined ? "-" : Number(v).toLocaleString("ja-JP");
+}
+
+function renderCheck() {
+  const c = state.check;
+  const st = (state.doc && state.doc.status && state.doc.status.state) || "確認中";
+  $("confirm-state").textContent = st;
+  $("confirm-state").className = "pill state-" + ({ 確認中: "review", 確定済み: "confirmed", 出力済み: "exported" }[st] || "review");
+  if (!c) {
+    $("check-summary").replaceChildren();
+    $("issue-list").replaceChildren();
+    return;
+  }
+  const h = c.header;
+  const chips = [
+    ["エラー", c.errors, c.errors ? "chip-error" : "chip-ok"],
+    ["警告", c.warnings, c.warnings ? "chip-warn" : "chip-ok"],
+    ["会社（マスタ）", c.partner_found ? `${h["会社コード"]} ${h["会社名"]}` : "未特定", c.partner_found ? "" : "chip-error"],
+    ["計上月", h.fiscal_month ? `${h.fiscal_month.replace("-", "/")}（締め ${h.closing_date.slice(5).replace("-", "/")}）` : "-", h.late ? "chip-warn" : ""],
+    ["返品合計（税込）", yen(c.tax ? c.tax.total : c.lines.reduce((s, l) => s + (l.金額 || 0), 0)) + " 円", ""],
+  ];
+  $("check-summary").replaceChildren(
+    ...chips.map(([k, v, cls]) => el("div", { class: "sum-chip " + cls }, el("span", { text: k }), el("b", { text: String(v) })))
+  );
+  renderTax();
+  const pending = state.unreviewedPages || [];
+  const items = [
+    ...pending.map((p) => ({ level: "エラー", check: "P", message: `${p}ページ目は、まだOCRまたは「保存して判定」が済んでいません。`, page: p, row: null })),
+    ...c.issues,
+  ];
+  $("issue-list").replaceChildren(
+    ...(items.length
+      ? items.map((i) =>
+          el(
+            "li",
+            {
+              class: i.level === "エラー" ? "lv-error" : "lv-warn",
+              title: i.row ? "クリックでその行へ移動" : "",
+              onclick: () => goToRow(i.page, i.row),
+            },
+            el("span", { class: "issue-badge", text: `${i.level} ${i.check}` }),
+            el("span", { class: "issue-where", text: i.row ? `${i.page}ページ ${i.row}行目` : i.page ? `${i.page}ページ` : "伝票" }),
+            el("span", { text: i.message })
+          )
+        )
+      : [el("li", { class: "lv-ok" }, el("span", { class: "issue-badge", text: "OK" }), el("span", { text: "エラー・警告はありません。確定できます。" }))])
+  );
+  const locked = isLocked();
+  $("confirm-btn").disabled = locked || c.errors > 0 || pending.length > 0;
+  $("confirm-btn").hidden = st !== "確認中";
+  $("unconfirm-btn").hidden = st !== "確定済み";
+}
+
+async function goToRow(page, row) {
+  if (!page) return;
+  if (page !== state.page) await openPage(page);
+  if (!row) return;
+  const tr = $("review-rows").children[row - 1];
+  if (tr) {
+    tr.scrollIntoView({ block: "center", behavior: "smooth" });
+    tr.classList.add("flash");
+    setTimeout(() => tr.classList.remove("flash"), 1600);
+  }
+}
+
+$("check-refresh").addEventListener("click", () => loadCheck());
+
+$("confirm-btn").addEventListener("click", async () => {
+  clearError();
+  if (state.dirty) return showError("保存していない変更があります。", "先に「保存して判定」を押してください。");
+  $("confirm-btn").disabled = true;
+  try {
+    const res = await api("POST", `/api/docs/${state.doc.doc_id}/confirm`);
+    state.doc.status = res.status;
+    $("confirm-status").textContent = `確定しました（${res.status.confirmed_at}）。返品の記録に登録しました。`;
+  } catch (e) {
+    showError(e.message, e.hint);
+  }
+  renderHeader();
+  await loadCheck();
+});
+
+$("unconfirm-btn").addEventListener("click", async () => {
+  if (!confirm("確定を取り消して、編集できる状態に戻しますか？（返品の記録からも外します）")) return;
+  clearError();
+  try {
+    const res = await api("DELETE", `/api/docs/${state.doc.doc_id}/confirm`);
+    state.doc.status = res.status;
+    $("confirm-status").textContent = "確定を取り消しました。";
+  } catch (e) {
+    showError(e.message, e.hint);
+  }
+  renderHeader();
+  await loadCheck();
+});
+
+// ---------------------------------------------------------------- 明細の「人が決める項目」と元の売上
+
+function select(options, value, onchange, disabled) {
+  return el(
+    "select",
+    { disabled, onchange: (ev) => onchange(ev.target.value) },
+    ...options.map(([v, label]) => el("option", { value: v, selected: v === value, text: label }))
+  );
+}
+
+function candidateLabel(c) {
+  return `${c.sales_no}（${c.sales_date.slice(5).replace("-", "/")}）${yen(c.unit_price)}円・残り${c.remaining}`;
+}
+
+function extraCell(r, i, tag = "td") {
+  r.extra = r.extra || { 明細区分: "通常", 良品不良: "", 税率: "", 元売上: null };
+  const ex = r.extra;
+  const locked = isLocked();
+  const change = (key, v) => {
+    ex[key] = v;
+    setDirty(true);
+    renderReview();
+  };
+  const discount = ex.明細区分 === "値引";
+  const line = checkLine(state.page, i + 1);
+  const parts = [
+    el("div", { class: "ex-line" }, el("span", { class: "ex-label", text: "区分" }), select([["通常", "通常"], ["値引", "値引"]], ex.明細区分, (v) => change("明細区分", v), locked)),
+  ];
+  if (discount) {
+    parts.push(
+      el(
+        "div",
+        { class: "ex-line" },
+        el("span", { class: "ex-label", text: "税率" }),
+        select([["", "選んでください"], ["10", "10%"], ["8", "8%（軽減）"], ["按分", "按分（金額の比率で分ける）"]], ex.税率 || "", (v) => change("税率", v), locked)
+      )
+    );
+  } else {
+    parts.push(
+      el(
+        "div",
+        { class: "ex-line" },
+        el("span", { class: "ex-label", text: "良品/不良" }),
+        select([["", "選んでください"], ["良品", "良品（在庫に戻す）"], ["不良", "不良（廃棄・返品）"]], ex.良品不良 || "", (v) => change("良品不良", v), locked)
+      )
+    );
+    const cell = r.cells["返品理由"];
+    if (state.reasons.length && cell) {
+      // 今の返品理由（入力した正解、なければ採用したOCRの文字）を、選択肢の中で選ばれた状態で見せる
+      const current = ((cell.truth || "").trim() || (cell.adopt_ocr ? cellOcr(cell).text : "")).replace(/\s+/g, "");
+      const known = state.reasons.find((x) => x.name.replace(/\s+/g, "") === current);
+      const opts = [["", "（マスタから選ぶ）"], ...state.reasons.map((x) => [x.name, `${x.reason_code} ${x.name}`])];
+      if (current && !known) opts.splice(1, 0, ["__ocr__", `伝票の文字「${current}」（マスタに無い）`]);
+      parts.push(
+        el(
+          "div",
+          { class: "ex-line" },
+          el("span", { class: "ex-label", text: "返品理由" }),
+          select(
+            opts,
+            known ? known.name : current ? "__ocr__" : "",
+            (v) => {
+              if (!v || v === "__ocr__") return;
+              cell.truth = v; // 選んだ理由を、返品理由の欄の正解として入れる
+              cell.truth_blank = false;
+              markStale(cell);
+              renderReview();
+            },
+            locked
+          )
+        )
+      );
+    }
+    // 元の売上
+    if (line) {
+      const cands = line.候補 || [];
+      const chosen = ex.元売上;
+      let body;
+      if (!cands.length) body = el("span", { class: "muted", text: "候補なし（品番・返品日・元売上番号を確認）" });
+      else if (cands.length === 1 && !chosen)
+        body = el("span", { class: "cand-one", text: candidateLabel(cands[0]), title: "候補が1件だけなので、照合先として表示しています" });
+      else
+        body = select(
+          [["", `選んでください（候補${cands.length}件）`], ...cands.map((c) => [`${c.sales_no}|${c.line_no}`, candidateLabel(c)])],
+          chosen ? `${chosen.sales_no}|${chosen.line_no}` : "",
+          (v) => {
+            const [no, ln] = v.split("|");
+            change("元売上", v ? { sales_no: no, line_no: Number(ln) } : null);
+          },
+          locked
+        );
+      parts.push(el("div", { class: "ex-line cand" }, el("span", { class: "ex-label", text: "元の売上" }), body));
+      if (line.商品名) parts.push(el("div", { class: "ex-line muted", text: `商品：${line.商品名}（${line.税率}%）` }));
+    }
+  }
+  const iss = rowIssues(state.page, i + 1);
+  if (iss.length)
+    parts.push(el("ul", { class: "row-issues" }, ...iss.map((x) => el("li", { class: x.level === "エラー" ? "lv-error" : "lv-warn", text: x.message }))));
+  return el(tag, { class: "extra-cell" }, ...parts);
+}
+
+// ---------------------------------------------------------------- マスタ・売上データの取り込み
+
+async function loadMasters() {
+  try {
+    const data = await api("GET", "/api/import/kinds");
+    renderMasters(data);
+  } catch (e) {
+    $("master-list").replaceChildren(el("p", { class: "muted", text: "マスタの情報を読めませんでした: " + e.message }));
+  }
+}
+
+function renderMasters(data) {
+  $("master-list").replaceChildren(
+    ...data.kinds.map((k) => {
+      const count = COUNT_KEYS[k.kind].map((t) => data.counts[t]).join(" / ");
+      const file = el("input", { type: "file", id: `imp-${k.kind}`, accept: ".xlsx,.csv" });
+      const result = el("div", { class: "imp-result" });
+      const btn = el("button", {
+        type: "button",
+        class: "small",
+        text: "取り込む",
+        onclick: async () => {
+          if (!file.files[0]) return result.replaceChildren(el("span", { class: "imp-ng", text: "ファイルを選んでください。" }));
+          const body = new FormData();
+          body.append("file", file.files[0]);
+          btn.disabled = true;
+          result.replaceChildren(el("span", { class: "muted", text: "取り込み中…" }));
+          try {
+            const res = await fetch(`/api/import/${k.kind}`, { method: "POST", body }).then((r) => r.json());
+            if (res.imported) {
+              result.replaceChildren(el("span", { class: "imp-ok", text: `${res.rows}行を取り込みました。` }), ...(res.notices || []).map((n) => el("div", { class: "muted", text: n })));
+              await loadMasters();
+              if (state.doc) await loadCheck();
+            } else if (res.errors) {
+              result.replaceChildren(
+                el("div", { class: "imp-ng", text: res.error || "取り込めませんでした。" }),
+                el(
+                  "table",
+                  { class: "stat-table imp-errors" },
+                  el("thead", {}, el("tr", {}, ...["行", "列", "理由"].map((h) => el("th", { text: h })))),
+                  el("tbody", {}, ...res.errors.map((e) => el("tr", {}, el("td", { text: e.row }), el("td", { class: "text", text: e.column }), el("td", { class: "text", text: e.message }))))
+                )
+              );
+            } else {
+              result.replaceChildren(el("div", { class: "imp-ng", text: res.error || "取り込めませんでした。" }), el("div", { class: "muted", text: res.hint || "" }));
+            }
+          } catch (e) {
+            result.replaceChildren(el("div", { class: "imp-ng", text: "サーバーに接続できません。" }));
+          } finally {
+            btn.disabled = false;
+          }
+        },
+      });
+      return el(
+        "div",
+        { class: "master-row" },
+        el("div", { class: "master-name" }, el("b", { text: k.label }), el("span", { class: "muted", text: `${count} 件` })),
+        el("a", { class: "small-link", href: `/api/import/${k.kind}/template`, text: "見本Excel" }),
+        el("label", { class: "file" }, file),
+        btn,
+        result
+      );
+    })
+  );
+}
+
+loadMasters();
+
+// ================================================================ 1行ずつ、伝票と横並びで確認する
+
+state.view = "row"; // "row"（1行ずつ） / "table"（一覧）
+state.rowIndex = 0;
+const FIELD_COLORS = { 品番: "#4353ff", 枝番: "#0f9f6e", 数量: "#b86400", 単価: "#d6363e", 返品理由: "#7c3aed" };
+
+function setView(v) {
+  state.view = v;
+  $("view-row").classList.toggle("on", v === "row");
+  $("view-table").classList.toggle("on", v === "table");
+  $("row-editor").hidden = v !== "row";
+  $("review-table-wrap").hidden = v !== "table";
+  renderRowEditor();
+}
+$("view-row").addEventListener("click", () => setView("row"));
+$("view-table").addEventListener("click", () => setView("table"));
+
+function rowBox(r) {
+  const byNo = new Map(state.items.map((it) => [it.no, it]));
+  const its = FIELDS.flatMap((f) => r.cells[f].ocr_nos).map((n) => byNo.get(n)).filter(Boolean);
+  if (!its.length) return null;
+  return {
+    x0: Math.min(...its.map((it) => it.box.x)),
+    x1: Math.max(...its.map((it) => it.box.x + it.box.w)),
+    y0: Math.min(...its.map((it) => it.box.y)),
+    y1: Math.max(...its.map((it) => it.box.y + it.box.h)),
+  };
+}
+
+function rowStatus(i) {
+  const iss = rowIssues(state.page, i + 1);
+  if (iss.some((x) => x.level === "エラー")) return "ng";
+  if (iss.length) return "warn";
+  return state.check && checkLine(state.page, i + 1) ? "ok" : "";
+}
+
+function renderRowEditor() {
+  const box = $("row-editor");
+  if (state.view !== "row" || !state.pageData) return box.replaceChildren();
+  if (!state.rows.length) {
+    return box.replaceChildren(el("p", { class: "muted", text: state.pageData.ocr ? "明細の行がありません。「行を追加」してください。" : "まだOCRしていません。" }));
+  }
+  state.rowIndex = Math.min(state.rowIndex, state.rows.length - 1);
+  const i = state.rowIndex;
+  const r = state.rows[i];
+
+  const nav = el(
+    "div",
+    { class: "row-nav" },
+    el("button", { type: "button", class: "secondary", text: "← 前の行", disabled: i === 0, onclick: () => { state.rowIndex--; renderRowEditor(); } }),
+    el(
+      "div",
+      { class: "row-tabs" },
+      ...state.rows.map((_, k) =>
+        el("button", {
+          type: "button",
+          class: `row-tab ${rowStatus(k)}${k === i ? " current" : ""}`,
+          text: `${k + 1}行目`,
+          title: { ng: "エラーがあります", warn: "警告があります", ok: "問題ありません" }[rowStatus(k)] || "",
+          onclick: () => { state.rowIndex = k; renderRowEditor(); },
+        })
+      )
+    ),
+    el("button", { type: "button", class: "secondary", text: "次の行 →", disabled: i === state.rows.length - 1, onclick: () => { state.rowIndex++; renderRowEditor(); } })
+  );
+
+  const crop = el("canvas", { id: "row-canvas", class: "row-canvas" });
+  const left = el(
+    "div",
+    { class: "row-left" },
+    el("div", { class: "row-left-head", text: `伝票の ${i + 1}行目のあたり（右の入力項目にポインタを乗せると、OCRが読んだ場所に枠が出ます）` }),
+    el("div", { class: "row-crop-wrap" }, crop),
+    el(
+      "div",
+      { class: "legend" },
+      ...FIELDS.map((f) => el("span", { class: "legend-item" }, el("i", { style: `background:${FIELD_COLORS[f]}` }), f))
+    )
+  );
+
+  const right = el(
+    "div",
+    { class: "row-right" },
+    el(
+      "div",
+      { class: "row-right-head" },
+      el("b", { text: `${i + 1}行目` }),
+      el("button", {
+        type: "button",
+        class: "small adopt-all",
+        text: "この行のOCRを全部採用",
+        title: "原本と見比べて、OCRの読み取りが正しいときだけ押してください",
+        disabled: isLocked() || !FIELDS.some((f) => canAdopt(r.cells[f])),
+        onclick: () => adoptAll(r),
+      })
+    ),
+    el("div", { class: "step-title", text: "① 人が決める項目" }),
+    extraCell(r, i, "div"),
+    el("div", { class: "step-title", text: "② OCRの読み取りを、左の伝票と見比べる" }),
+    el("div", { class: "field-grid" }, ...FIELDS.map((f) => reviewCell(r, i, f, "div")))
+  );
+
+  box.replaceChildren(nav, el("div", { class: "row-split" }, left, right));
+  requestAnimationFrame(drawRowCrop);
+}
+
+function drawRowCrop() {
+  const cv = document.getElementById("row-canvas");
+  if (!cv || !state.image || state.view !== "row") return;
+  const r = state.rows[state.rowIndex];
+  const img = state.image;
+  const b = r && rowBox(r);
+  // 行のまわり（上は見出しが入るくらい広め）を切り出す
+  // 行の文字があるところだけを切り出して、大きく見せる（上は表の見出しが入るくらい広め）
+  const pad = Math.round(img.height * 0.02);
+  const y0 = b ? Math.max(0, b.y0 - pad * 4) : 0;
+  const y1 = b ? Math.min(img.height, b.y1 + pad * 2) : img.height;
+  const x0 = b ? Math.max(0, b.x0 - pad * 3) : 0;
+  const x1 = b ? Math.min(img.width, b.x1 + pad * 3) : img.width;
+  const w = cv.parentElement.clientWidth || 600;
+  const scale = w / (x1 - x0);
+  cv.width = w;
+  cv.height = Math.max(1, Math.round((y1 - y0) * scale));
+  const ctx2 = cv.getContext("2d");
+  ctx2.drawImage(img, x0, y0, x1 - x0, y1 - y0, 0, 0, cv.width, cv.height);
+  if (!r) return;
+  const byNo = new Map(state.items.map((it) => [it.no, it]));
+  const hover = state.hoverCell && state.hoverCell.row === state.rowIndex ? state.hoverCell.field : null;
+  // 枠は、ポインタを乗せた（または入力中の）項目の分だけ出す
+  for (const f of FIELDS) {
+    if (hover !== f) continue;
+    for (const n of r.cells[f].ocr_nos) {
+      const it = byNo.get(n);
+      if (!it) continue;
+      ctx2.lineWidth = 3;
+      ctx2.strokeStyle = FIELD_COLORS[f];
+      ctx2.strokeRect((it.box.x - x0) * scale, (it.box.y - y0) * scale, it.box.w * scale, it.box.h * scale);
+      if (hover === f) {
+        ctx2.fillStyle = FIELD_COLORS[f] + "14";
+        ctx2.fillRect((it.box.x - x0) * scale, (it.box.y - y0) * scale, it.box.w * scale, it.box.h * scale);
+      }
+    }
+  }
+}
+window.addEventListener("resize", () => requestAnimationFrame(drawRowCrop));
+
+// ================================================================ 計算式（税率ごとの合計・消費税）
+
+function renderTax() {
+  const t = state.check && state.check.tax;
+  const box = $("tax-box");
+  if (!t || !t.rates.length) return box.replaceChildren();
+  const rows = [];
+  for (const r of t.rates) {
+    const parts = [...r.items.map((a) => yen(a)), ...r.discounts.map((d) => yen(d.amount))];
+    rows.push(
+      el(
+        "div",
+        { class: "tax-rate" },
+        el("div", { class: "tax-title", text: `${r.rate}%対象` }),
+        el("div", { class: "formula" }, el("span", { text: "合計（税込）" }), el("code", { text: `${parts.join(" + ").replace(/\+ -/g, "− ")} = ${yen(r.total)} 円` })),
+        ...r.discounts.filter((d) => d.note !== "値引").map((d) => el("div", { class: "formula sub" }, el("span", { text: "値引の按分" }), el("code", { text: `${d.note.replace("値引の按分", "").replace(/[（）]/g, "")} → ${yen(d.amount)} 円` }))),
+        el(
+          "div",
+          { class: "formula" },
+          el("span", { text: "うち消費税" }),
+          el("code", { text: `${yen(r.total)} × ${r.rate} ÷ ${100 + r.rate} = ${r.tax_exact} → ${t.rounding} → ${yen(r.tax)} 円` })
+        ),
+        el("div", { class: "formula" }, el("span", { text: "税抜金額" }), el("code", { text: `${yen(r.total)} − ${yen(r.tax)} = ${yen(r.base)} 円` }))
+      )
+    );
+  }
+  box.replaceChildren(
+    el("div", { class: "tax-head" }, el("b", { text: "計算式" }), el("span", { class: "muted", text: "単価は税込。消費税は合計の中に入っているので、足しません" })),
+    ...rows,
+    el("div", { class: "formula total" }, el("span", { text: "返品合計（税込）" }), el("code", { text: `${yen(t.total)} 円` }))
+  );
+}
+
+// ================================================================ ドラッグ＆ドロップで読み込む（要件定義書 F1）
+
+(function setupDrop() {
+  const zone = $("upload-form");
+  let depth = 0;
+  // ページのほかの場所に落としても、ブラウザがPDFを開いて画面が切り替わらないようにする
+  window.addEventListener("dragover", (ev) => ev.preventDefault());
+  window.addEventListener("drop", (ev) => ev.preventDefault());
+  zone.addEventListener("dragenter", (ev) => { ev.preventDefault(); depth++; zone.classList.add("dragging"); });
+  zone.addEventListener("dragleave", () => { depth = Math.max(0, depth - 1); if (!depth) zone.classList.remove("dragging"); });
+  zone.addEventListener("dragover", (ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = "copy"; });
+  zone.addEventListener("drop", (ev) => {
+    ev.preventDefault();
+    depth = 0;
+    zone.classList.remove("dragging");
+    const files = [...ev.dataTransfer.files];
+    if (!files.length) return;
+    const pdfs = files.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+    if (!pdfs.length) return showError("PDF以外のファイルです: " + files[0].name, "拡張子が .pdf のファイルを落としてください。");
+    if (files.length > 1) $("status").textContent = `今は1つずつ読み込みます（${pdfs[0].name} を読み込みます）。複数まとめての読み込みは次の周で作ります。`;
+    const dt = new DataTransfer();
+    dt.items.add(pdfs[0]);
+    $("pdf").files = dt.files;
+    zone.requestSubmit();
+  });
+})();
+
+
+// ファイルを選んだら、すぐに読み込む（アップロードボタンは使わない）
+$("pdf").addEventListener("change", () => {
+  const f = $("pdf").files[0];
+  if (!f) return;
+  $("file-name").textContent = f.name;
+  $("upload-form").requestSubmit();
 });

@@ -25,7 +25,9 @@
       <a href="#step-upload" class="step"><span class="step-no">01</span><span><b>読み込む</b><small>Upload</small></span></a>
       <a href="#step-read" class="step"><span class="step-no">02</span><span><b>読み取る</b><small>OCR</small></span></a>
       <a href="#step-review" class="step"><span class="step-no">03</span><span><b>確認する</b><small>Review</small></span></a>
-      <a href="#step-totals" class="step"><span class="step-no">04</span><span><b>集計する</b><small>Analytics</small></span></a>
+      <a href="#step-confirm" class="step"><span class="step-no">04</span><span><b>照合・確定</b><small>Match &amp; Confirm</small></span></a>
+      <a href="#step-totals" class="step"><span class="step-no">05</span><span><b>集計する</b><small>Analytics</small></span></a>
+      <a href="#step-masters" class="step step-sub"><span class="step-no">DB</span><span><b>マスタ・売上</b><small>Master data</small></span></a>
     </nav>
 
     <!-- PDFを読み込むと表示される -->
@@ -63,21 +65,24 @@
       <span id="status" class="status" role="status"></span>
     </header>
 
-    <form id="upload-form" class="panel upload" data-step="01">
-      <span class="anchor" id="step-upload"></span>
-      <div class="upload-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
-      </div>
+    <!-- 目印（ナビゲーションの飛び先）は、レイアウトに影響しないようにフォームの外に置く -->
+    <span class="anchor" id="step-upload"></span>
+    <form id="upload-form" class="panel upload" data-step="01" aria-labelledby="upload-title">
       <div class="upload-text">
-        <h3>伝票PDFを読み込む</h3>
-        <p class="note">PDFの各ページを、このPC内のEasyOCR（日本語・英数字）で読み取ります。外部には送信しません。</p>
+        <h3 id="upload-title">伝票PDFを読み込む</h3>
+        <p class="note">PDFを選ぶと、すぐに読み込みます。PDFの各ページは、このPC内のEasyOCR（日本語・英数字）で読み取ります。外部には送信しません。</p>
       </div>
-      <div class="upload-controls">
-        <label class="file">
-          <input type="file" id="pdf" name="pdf" accept="application/pdf,.pdf">
-        </label>
-        <button type="submit" id="upload-btn">アップロード</button>
-      </div>
+      <!-- 枠全体が「ファイルを選択」。ドラッグ＆ドロップもここに落とす -->
+      <label class="dropzone" for="pdf">
+        <span class="dropzone-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg>
+        </span>
+        <span class="dropzone-main">ここにPDFをドラッグ＆ドロップ</span>
+        <span class="dropzone-or">または</span>
+        <span class="dropzone-btn">ファイルを選択</span>
+        <span id="file-name" class="dropzone-file" aria-live="polite">選択されていません</span>
+        <input type="file" id="pdf" name="pdf" accept="application/pdf,.pdf" class="visually-hidden">
+      </label>
     </form>
 
     <div id="error" class="error" role="alert" hidden>
@@ -124,6 +129,17 @@
         </div>
       </div>
 
+      <section id="slip-header" class="panel" data-step="03">
+        <h2>伝票の見出し <span id="header-state" class="pill muted"></span></h2>
+        <p class="note">OCRが読んだ候補を、原本と見比べて確認してください。違っていたら直してから「見出しを保存」を押します。</p>
+        <div id="header-fields" class="header-grid"></div>
+        <div class="actions">
+          <button type="button" id="header-use-ocr" class="secondary">OCRの候補をすべて入れる</button>
+          <button type="button" id="header-save">見出しを保存</button>
+          <span id="header-status" class="status"></span>
+        </div>
+      </section>
+
       <section id="review" class="panel review" data-step="03">
         <span class="anchor" id="step-review"></span>
         <h2>明細の確認 <span id="review-page" class="pill"></span></h2>
@@ -133,7 +149,12 @@
           <button type="button" id="assign-done">選択を終わる</button>
         </div>
         <div id="unassigned" class="unassigned"></div>
-        <div class="review-scroll">
+        <div class="view-switch" role="tablist" aria-label="明細の表示のしかた">
+          <button type="button" id="view-row" class="on" role="tab">1行ずつ（伝票と横並び）</button>
+          <button type="button" id="view-table" role="tab">一覧で見る</button>
+        </div>
+        <div id="row-editor" class="row-editor"></div>
+        <div class="review-scroll" id="review-table-wrap" hidden>
           <table class="review-table">
             <thead><tr id="review-head"></tr></thead>
             <tbody id="review-rows"></tbody>
@@ -165,7 +186,22 @@
         </details>
       </section>
 
-      <section id="totals" class="panel" data-step="04">
+      <section id="confirm" class="panel" data-step="04">
+        <span class="anchor" id="step-confirm"></span>
+        <h2>照合・確定 <span id="confirm-state" class="pill"></span></h2>
+        <p class="note">マスタと売上データで照合した結果です。<b class="lv-error">エラー</b>が0件になると確定できます。<b class="lv-warn">警告</b>は、内容を確かめたうえで確定できます。</p>
+        <div id="check-summary" class="check-summary"></div>
+        <div id="tax-box" class="tax-box"></div>
+        <ul id="issue-list" class="issue-list"></ul>
+        <div class="actions">
+          <button type="button" id="check-refresh" class="secondary">照合し直す</button>
+          <button type="button" id="confirm-btn">この伝票を確定</button>
+          <button type="button" id="unconfirm-btn" class="secondary" hidden>確定を取り消す</button>
+          <span id="confirm-status" class="status"></span>
+        </div>
+      </section>
+
+      <section id="totals" class="panel" data-step="05">
         <span class="anchor" id="step-totals"></span>
         <h2>集計 <span class="pill muted">保存済みのページのみ</span></h2>
         <div class="totals-grid">
@@ -180,6 +216,13 @@
         </div>
         <p class="note">記録ファイル（保存するたびに更新）: 記録フォルダ内の <code>review_cells.csv</code>（全欄のOCR結果・正解・判定）と <code>summary.csv</code>（項目別・ページ別の集計）</p>
       </section>
+    </section>
+
+    <section id="masters" class="panel">
+      <span class="anchor" id="step-masters"></span>
+      <h2>マスタ・売上データ <span class="pill muted">照合に使うデータ</span></h2>
+      <p class="note">Excel（.xlsx）またはCSVを取り込みます。1行でもエラーがあれば何も取り込まず、どの行のどの列が問題かを表示します。まず見本Excelをダウンロードして、列名を合わせてください。</p>
+      <div id="master-list" class="master-list"></div>
     </section>
   </main>
 </div>
