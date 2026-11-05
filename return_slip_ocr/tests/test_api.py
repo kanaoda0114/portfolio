@@ -365,3 +365,29 @@ def test_OCRの値は最初から採用し要確認の欄だけ採用しない(c
     assert first["品番"]["adopt_ocr"] is False  # 「NOT E- 1 0 41」信頼度0.29 → 要確認
     assert first["数量"]["adopt_ocr"] is True  # 「2」信頼度1.00 → 最初から採用
     assert first["返品理由"]["adopt_ocr"] is True
+
+
+def _upload_with_fixture(client):
+    import json
+
+    fixture = os.path.join(os.path.dirname(__file__), "fixtures", "sample_slip_ocr.json")
+    ocr = json.load(open(fixture, encoding="utf-8"))
+    doc_id = upload(client)
+    app_module.store.save_ocr(app_module.store.get(doc_id), 1, {"page": 1, "dpi": 200, "width": 1, "height": 1, "items": ocr["items"]})
+    return doc_id
+
+
+def test_見出しは保存前でもOCRの値で照合し自信の低い項目は確認を求める(client):
+    doc_id = _upload_with_fixture(client)
+    check = client.get(f"/api/docs/{doc_id}/check").get_json()["check"]
+    assert check["header_values"]["伝票番号"] == "R-000123"  # 保存していなくてもOCRの値を使う
+    assert check["header"]["会社コード"] == "100001"
+    low = [i for i in check["issues"] if i.get("field")]
+    assert [i["field"] for i in low] == ["返品日"]  # 信頼度0.44
+
+
+def test_自信の低い見出しを確認済みにすると求めなくなる(client):
+    doc_id = _upload_with_fixture(client)
+    header = {**GOOD_HEADER, "確認済み": ["返品日"]}
+    body = client.put(f"/api/docs/{doc_id}/header", json=header).get_json()
+    assert not [i for i in body["check"]["issues"] if i.get("field")]
