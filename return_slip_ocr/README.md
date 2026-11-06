@@ -1,5 +1,7 @@
 # 返品伝票OCR（読み取り → マスタ照合 → 人が確認 → 基幹システム取込用Excel）
 
+[![tests](https://github.com/kanaoda0114/portfolio/actions/workflows/tests.yml/badge.svg)](https://github.com/kanaoda0114/portfolio/actions/workflows/tests.yml)
+
 返品伝票のPDFをOCRで読み取り、**マスタ・売上データと照合して、人が確認・確定したものだけを基幹システム取込用Excelに出す**ローカルWebアプリです。
 
 「OCR（AI）に読ませて終わり」ではなく、**AIの出力を人が検証し、迷うところは人に判断を任せ、精度を数字で測りながら改善する**ことを目的にしています。
@@ -80,6 +82,16 @@ py -m venv .venv
 ```
 
 ブラウザで http://127.0.0.1:5000 を開きます。初回はOCRモデルのダウンロードに時間がかかります（ダウンロードされるのはモデルだけで、PDFは送信しません）。
+
+## テスト
+
+```bash
+.venv\Scripts\python -m pytest -q
+```
+
+- 自動テスト 162件（`tests/`）。OCRエンジンは偽の reader に置き換えて、割り当て・読み直し・照合・Excel出力・APIの動きを確かめる
+- GitHub に push すると [GitHub Actions](../.github/workflows/tests.yml) が同じテストを自動で実行し、結果が先頭のバッジに出る
+- OCRそのものの正解率は `tools/ocr_benchmark.py` で別に計測する（`docs/test_reports/`）
 
 ## 開発のきっかけ
 
