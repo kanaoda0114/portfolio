@@ -46,11 +46,14 @@ PDF ──▶ pdf_renderer（PyMuPDFで画像化）
 | `config.py` | 設定値（解像度・しきい値・対象項目など）を1か所に集約 |
 | `services/pdf_renderer.py` | PDFの検証（暗号化・破損・偽装ファイル）と画像化 |
 | `services/ocr_engine.py` | EasyOCRの初期化（1回だけ）と実行（排他制御つき） |
+| `services/ocr_pipeline.py` | OCR → 明細の割り当て → 欄の読み直し、の流れを1つにまとめる |
+| `services/ocr_refine.py` | 欄を切り出し、列に出る文字だけに絞って読み直す（精度向上） |
 | `services/table_mapper.py` | 見出し位置から列を決め、文字枠を明細へ割り当て |
 | `services/review.py` | 表記ゆれの正規化、判定、集計、CSV出力 |
 | `services/doc_store.py` | PDFごとの記録フォルダ管理 |
 | `static/`, `templates/` | 画面（HTML / CSS / JavaScript） |
 | `check_ocr.py` | 画面を使わずOCRだけ確認するコマンド |
+| `tools/ocr_benchmark.py` | 正解つきの架空伝票を自動生成してOCRの正解率を測る（`docs/test_reports/` に結果） |
 
 ## 使用技術
 
