@@ -112,3 +112,21 @@ def run_ocr(image, reader):
             }
         )
     return items
+
+
+def recognize_crop(gray, reader, allowlist=None):
+    """切り出した画像（グレースケール）を1つの文字列として読む。文字の場所探しはせず、認識だけ行う。
+
+    allowlist を渡すと、その文字だけで読む（数量なら数字だけ、など）。
+    戻り値: (文字, 信頼度)。読めなければ ("", None)
+    """
+    h, w = gray.shape[:2]
+    try:
+        with _ocr_lock:
+            res = reader.recognize(gray, horizontal_list=[[0, w, 0, h]], free_list=[], allowlist=allowlist, detail=1)
+    except Exception as e:
+        raise AppError(f"OCR（読み直し）中にエラーが発生しました（{type(e).__name__}: {e}）", status=500, code="ocr_failed")
+    if not res:
+        return "", None
+    _, text, conf = res[0]
+    return text, float(conf)
