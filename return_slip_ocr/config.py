@@ -50,6 +50,43 @@ TABLE_END_LABELS = ["小計", "合計", "総合計"]
 # 文字枠の幅のうち、この割合以上が1つの列に入っているときだけ自動で割り当てる
 AUTO_ASSIGN_MIN_OVERLAP = 0.8
 
+# 明細表の縦の罫線を画像から見つけて、列の境界に使う（services/table_lines.py、Issue #19）
+USE_TABLE_LINES = True
+
+# ---- 欄の読み直し（services/ocr_refine.py、Issue #19） ----
+
+# 明細と見出しの欄を1つずつ切り出して読み直す。False なら最初のOCR結果のまま
+REFINE_CELLS = True
+
+# 列ごとに「出てくる文字」。ここに無い項目（返品理由）は読み直さない
+_DIGITS = "0123456789"
+_CODE = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + _DIGITS + "-"
+REFINE_ALLOWLIST = {
+    "品番": _CODE,
+    "枝番": _DIGITS,
+    "数量": _DIGITS,
+    "単価": _DIGITS + ",-",
+}
+REFINE_HEADER_ALLOWLIST = {
+    "会社コード": _DIGITS,
+    "伝票番号": _CODE,
+    "返品日": _DIGITS + "/",
+    "元売上番号": _CODE,
+}
+
+# 切り出した欄の画像を、この高さ（px）になるまで拡大してから読む
+REFINE_TARGET_HEIGHT = 64
+
+# 最初のOCRで何も見つからなかった欄を読み直したとき、この信頼度以上なら採用する
+REFINE_MIN_CONF_NEW = 0.6
+
+# 欄の中で黒い部分がこの割合未満なら空欄とみなし、読み直さない
+REFINE_MIN_INK = 0.004
+
+# 読んだ文字をマスタ・売上データの値で直す（services/candidates.py）。
+# 取り違えやすい文字（O/0 など）の入れ替えや1文字違いで、マスタの値が1つだけ当てはまるときだけ直す
+USE_KNOWN_VALUES = True
+
 # ---- 確定と取込用Excelの出力（docs/要件定義書.md F4〜F7） ----
 
 _HERE = os.path.dirname(os.path.abspath(__file__))

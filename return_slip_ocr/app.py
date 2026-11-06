@@ -28,6 +28,8 @@ from services import slip_check as sc
 from services.doc_store import STATE_CONFIRMED, STATE_EXPORTED, STATE_REVIEWING, DocStore, now_str
 from services.errors import AppError
 from services.ocr_engine import get_reader, reader_info, run_ocr
+from services import candidates as cand
+from services.ocr_pipeline import read_page
 from services.pdf_renderer import inspect_pdf, render_first_page, render_page
 from services.table_mapper import empty_cell, propose_rows
 
@@ -376,7 +378,13 @@ def api_page_ocr(doc_id, page):
     t1 = time.perf_counter()
     reader = get_reader(config.OCR_LANGS, config.USE_GPU, config.MODEL_DIR, config.ALLOW_MODEL_DOWNLOAD)
     t2 = time.perf_counter()
-    items = run_ocr(image, reader)
+    # OCR → 明細の割り当て → 欄ごとの読み直し（services/ocr_pipeline.py）
+    con = _db()
+    try:
+        known = cand.known_from_db(con)
+    finally:
+        con.close()
+    items, proposal = read_page(image, reader, known=known)
     t3 = time.perf_counter()
 
     ocr = {
@@ -398,9 +406,6 @@ def api_page_ocr(doc_id, page):
     saved = review["pages"].get(str(page))
     source_override = None
     if saved:
-        proposal = propose_rows(
-            items, config.TABLE_HEADERS, config.REVIEW_FIELDS, config.TABLE_END_LABELS, config.AUTO_ASSIGN_MIN_OVERLAP
-        )
         new_rows = []
         n = max(len(saved["rows"]), len(proposal["rows"]))
         for i in range(n):
@@ -426,9 +431,6 @@ def api_page_ocr(doc_id, page):
     else:
         # 初めてOCRしたページは、自動で割り当てた明細（OCRの値を最初から採用）をそのまま保存しておく。
         # 人が書き換えなくても照合・チェックができるようにするため（要確認の欄は未確定のまま残る）
-        proposal = propose_rows(
-            items, config.TABLE_HEADERS, config.REVIEW_FIELDS, config.TABLE_END_LABELS, config.AUTO_ASSIGN_MIN_OVERLAP
-        )
         rows = [{**r, "extra": rv.empty_extra()} for r in proposal["rows"]]
         _auto_adopt(rows, items)
         store.save_page_review(doc, page, rows, _write_csvs)

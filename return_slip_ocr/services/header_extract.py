@@ -53,6 +53,20 @@ def _left_neighbor(item, items, exclude):
     return max(cands, key=lambda it: it["box"]["x"]) if cands else None
 
 
+def _label_match(text, labels):
+    """text が見出し（labels）で始まっていれば、その見出しを返す。
+    4文字以上の見出しは、1文字の読み違い（「伝票希号」）も同じ見出しとみなす。"""
+    for lb in sorted(labels, key=len, reverse=True):
+        if text.startswith(lb):
+            return lb
+    for lb in sorted(labels, key=len, reverse=True):
+        if len(lb) >= 4 and len(text) >= len(lb):
+            head = text[: len(lb)]
+            if sum(a != b for a, b in zip(head, lb)) == 1:
+                return lb
+    return None
+
+
 def _found(value, items_used):
     return {
         "value": value,
@@ -71,14 +85,14 @@ def extract_header(items):
     items = items or []
     all_labels = _all_labels()
     # 見出しそのものの文字枠（値の候補から外す）
-    label_nos = {it["no"] for it in items if _norm(it["text"]) in all_labels}
+    label_nos = {it["no"] for it in items if _label_match(_norm(it["text"]), all_labels) == _norm(it["text"]) or len(_norm(it["text"])) == 0}
     result = {f: None for f in HEADER_FIELDS}
 
     for field, labels in LABELS.items():
         best = None
         for it in items:
             t = _norm(it["text"])
-            lab = next((lb for lb in sorted(labels, key=len, reverse=True) if t.startswith(lb)), None)
+            lab = _label_match(t, labels)
             if not lab:
                 continue
             # 「伝票番号 R-000123」のように、見出しと値が1つの枠に入っていることがある
